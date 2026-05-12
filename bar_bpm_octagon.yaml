@@ -1,0 +1,108 @@
+bunch:
+  charge_nC: 1.0
+  density:
+    kind: gaussian
+    sigma_mm: 62.0
+    cutoff_sigma: 0.0
+  longitudinal_grid:
+    dz_mm: 0.25
+    no_cut_span_sigma: 8.0
+
+chamber:
+  kind: polygon
+  # Approximate BAR octagon inferred from Fig. 1 and Fig. 11 of BAR BPM.pdf.
+  # Replace these points with exact GDF boundary coordinates when available.
+  points_mm:
+    - [-10.0, 20.0]
+    - [10.0, 20.0]
+    - [40.0, 8.0]
+    - [40.0, -8.0]
+    - [10.0, -20.0]
+    - [-10.0, -20.0]
+    - [-40.0, -8.0]
+    - [-40.0, 8.0]
+  boundary_elements: 320
+  quadrature_order: 8
+
+buttons:
+  radius_mm: 9.0
+  thickness_mm: 2.0
+  gap_mm: 0.3
+  capacitance_pf: 3.4
+  pickups:
+    - label: A
+      center_mm: [-19.75, 16.10]
+      color: tab:orange
+    - label: B
+      center_mm: [19.75, 16.10]
+      color: tab:green
+    - label: C
+      center_mm: [19.75, -16.10]
+      color: tab:red
+    - label: D
+      center_mm: [-19.75, -16.10]
+      color: tab:purple
+
+filter:
+  characteristic_impedance_ohm: 50.0
+  cable:
+    enabled: true
+    # exp(-sqrt(f / fc)) model.
+    attenuation_fc_hz: 4.65e8
+  analog:
+    type: bandpass_butter
+    order: 2
+    center_hz: 5.0e8
+    bandwidth_hz: 2.0e7
+  comparison_filters:
+    - name: LPF 70MHz
+      type: lowpass_butter
+      order: 4
+      cutoff_hz: 7.0e7
+    - name: BPF 500MHz
+      type: bandpass_butter
+      order: 2
+      center_hz: 5.0e8
+      bandwidth_hz: 2.0e7
+  resolution:
+    relative_error_min: 1.0e-4
+    relative_error_max: 1.0e-2
+    num_points: 200
+    reference_relative_error: 1.6e-3
+
+signal_cases:
+  - name: 1nC, 1mm
+    charge_nC: 1.0
+    density:
+      kind: gaussian
+      sigma_mm: 1.0
+      cutoff_sigma: 0.0
+  - name: 1nC, 62mm
+    charge_nC: 1.0
+    density:
+      kind: gaussian
+      sigma_mm: 62.0
+      cutoff_sigma: 0.0
+  - name: 32nC, 65mm
+    charge_nC: 32.0
+    density:
+      kind: gaussian
+      sigma_mm: 65.0
+      cutoff_sigma: 0.0
+  - name: 32nC, 41mm
+    charge_nC: 32.0
+    density:
+      kind: gaussian
+      sigma_mm: 41.0
+      cutoff_sigma: 0.0
+
+beam_grid:
+  x_half_size_mm: 15.0
+  y_half_size_mm: 8.0
+  nx: 61
+  ny: 41
+  linear_fit_half_range_mm: 5.0
+  polynomial_order: 5
+
+output:
+  directory: outputs/bar_octagon
