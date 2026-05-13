@@ -3,9 +3,48 @@ from __future__ import annotations
 """
 BAR BPM analysis tool.
 
-Maintenance note:
-- Keep the physics comments in this file aligned with the equations documented in
-  README.md, especially the labeled equations in Section 1.
+Purpose
+-------
+This script reproduces the main electrostatic BPM studies discussed in
+`README.md`:
+
+1. longitundinal button signal formation and filtering
+2. 2D boundary-element BPM position reconstruction
+3. linearity, polynomial correction, and resolution plots
+4. BAR-style signal-chain figures such as Fig. 3/4/5/7/8/9
+
+How to use
+----------
+Run the script with one YAML input file:
+
+    python3 bpm_analysis.py /absolute/path/to/config.yaml
+
+Expected outputs
+----------------
+The script writes figures and a Markdown report into the output directory defined
+by the YAML file. Typical outputs include:
+
+- figure_3_impedance_and_image_current_fft.png
+- figure_4_image_current_and_button_voltage.png
+- figure_5_cable_input_output.png
+- figure_7_signal_fft_and_filter_response.png
+- figure_8_filter_output_voltage.png
+- figure_9_button_voltage_cases.png
+- figure_11_linearity.png
+- figure_12_polyfit.png
+- figure_13_resolution.png
+- analysis_report.md
+
+Version metadata
+----------------
+- Initialized date: 2026-05-05
+- Last updated: 2026-05-13
+- Version: 0.6.0
+
+Maintenance note
+----------------
+Keep the physics comments in this file aligned with the equations documented in
+`README.md`, especially the labeled equations in Section 1.
 """
 
 import argparse
@@ -35,6 +74,24 @@ matplotlib.use("Agg")
 
 @dataclass
 class Boundary:
+    """Discrete 2D chamber boundary used by the BEM solve.
+
+    Attributes:
+        points:
+            Boundary vertices or sampled points in mm, ordered around the chamber.
+        seg_start, seg_end:
+            Start and end points of each boundary segment in mm.
+        midpoints:
+            Segment midpoints in mm. These act as collocation points in the BEM.
+        tangents:
+            Unit tangent vector for each segment.
+        lengths:
+            Segment lengths in mm.
+        perimeter:
+            Total chamber perimeter in mm.
+        kind:
+            Geometry type such as ``round``, ``ellipse``, or ``polygon``.
+    """
     points: np.ndarray
     seg_start: np.ndarray
     seg_end: np.ndarray
@@ -46,25 +103,70 @@ class Boundary:
 
 
 def load_config(path: Path) -> dict[str, Any]:
+    """Load one YAML configuration file.
+
+    Args:
+        path:
+            Absolute or relative path to the YAML input file.
+
+    Returns:
+        Parsed YAML content as a nested Python dictionary.
+    """
     with path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
 
 
 def mm_to_m(values: Any) -> Any:
+    """Convert millimeter-valued scalars or arrays to meters.
+
+    Args:
+        values:
+            Scalar, list, or NumPy-compatible array in mm.
+
+    Returns:
+        NumPy array or scalar-like object converted to meters.
+    """
     return np.asarray(values, dtype=float) * 1e-3
 
 
 def ensure_dir(path: Path) -> None:
+    """Create an output directory if it does not already exist.
+
+    Args:
+        path:
+            Directory path to create.
+    """
     path.mkdir(parents=True, exist_ok=True)
 
 
 def close_boundary(points: np.ndarray) -> np.ndarray:
+    """Ensure that a boundary point list is explicitly closed.
+
+    Args:
+        points:
+            Array of shape ``(N, 2)`` describing ordered boundary points.
+
+    Returns:
+        Same point list if already closed, otherwise a new array with the first
+        point appended at the end.
+    """
     if np.allclose(points[0], points[-1]):
         return points.copy()
     return np.vstack([points, points[0]])
 
 
 def sample_polygon(points_mm: list[list[float]], n_segments: int) -> np.ndarray:
+    """Resample a polygon boundary into approximately uniform segments.
+
+    Args:
+        points_mm:
+            Polygon corner points in mm, ordered around the chamber.
+        n_segments:
+            Target total number of boundary segments.
+
+    Returns:
+        Array of resampled polygon points in mm.
+    """
     points = np.asarray(points_mm, dtype=float)
     closed = close_boundary(points)
     edge_vec = np.diff(closed, axis=0)
@@ -79,6 +181,17 @@ def sample_polygon(points_mm: list[list[float]], n_segments: int) -> np.ndarray:
 
 
 def build_boundary(chamber_cfg: dict[str, Any]) -> Boundary:
+    """Build the discrete chamber boundary from YAML geometry settings.
+
+    Supported geometries are described in `README.md` Section 2.3.
+
+    Args:
+        chamber_cfg:
+            The ``chamber`` block from the YAML file.
+
+    Returns:
+        A :class:`Boundary` object containing the fully discretized cross-section.
+    """
     kind = chamber_cfg["kind"].lower()
     n_segments = int(chamber_cfg.get("boundary_elements", 320))
 
@@ -116,6 +229,19 @@ def build_boundary(chamber_cfg: dict[str, Any]) -> Boundary:
 
 
 def inside_chamber(boundary: Boundary, chamber_cfg: dict[str, Any], xy_mm: np.ndarray) -> np.ndarray:
+    """Test whether transverse sample points lie inside the chamber aperture.
+
+    Args:
+        boundary:
+            Discrete chamber boundary.
+        chamber_cfg:
+            Chamber block from YAML.
+        xy_mm:
+            Candidate beam positions of shape ``(N, 2)`` in mm.
+
+    Returns:
+        Boolean mask selecting the points that lie inside the vacuum aperture.
+    """
     kind = chamber_cfg["kind"].lower()
     if kind == "round":
         radius = float(chamber_cfg["radius_mm"])
@@ -129,6 +255,27 @@ def inside_chamber(boundary: Boundary, chamber_cfg: dict[str, Any], xy_mm: np.nd
 
 
 def button_masks(button_cfg: dict[str, Any], boundary: Boundary) -> tuple[list[str], list[str], np.ndarray]:
+    """Map each button to the boundary elements it covers.
+
+    The code represents a button by the set of boundary-element midpoints lying
+    within one button radius of the declared button center. This is the discrete
+    counterpart of the boundary charge integration described in `README.md`
+    Section 1.4.
+
+    Args:
+        button_cfg:
+            The ``buttons`` block from YAML.
+        boundary:
+            Discrete chamber boundary.
+
+    Returns:
+        Tuple ``(labels, colors, mask_array)`` where:
+
+        - ``labels`` is the ordered button label list
+        - ``colors`` is the plotting color list
+        - ``mask_array`` has shape ``(4, Nsegments)`` and selects the boundary
+          elements assigned to each pickup
+    """
     # Each button is represented by the subset of boundary elements whose midpoints
     # lie within one button radius of the declared button center. This is the discrete
     # approximation used later in the README Sec. 1.4 charge integration step.
@@ -160,6 +307,22 @@ def button_masks(button_cfg: dict[str, Any], boundary: Boundary) -> tuple[list[s
 
 
 def build_green_matrix(boundary: Boundary, quad_order: int = 8) -> np.ndarray:
+    """Assemble the boundary-element Green influence matrix.
+
+    Physics reference:
+        `README.md` Eq. (1.6) and Eq. (1.7).
+
+    Args:
+        boundary:
+            Discrete chamber boundary.
+        quad_order:
+            Gauss-Legendre quadrature order used for off-diagonal segment
+            integrals.
+
+    Returns:
+        Square matrix ``G_ij`` whose entries are the logarithmic kernel line
+        integrals between boundary elements.
+    """
     # README Eq. (1.5): G(r, r') = (1 / 2 pi epsilon0) ln(1 / |r - r'|).
     #
     # The common factor 1 / (2 pi epsilon0) is omitted here because it cancels in the
@@ -195,6 +358,27 @@ def compute_button_charges(
     green_inv: np.ndarray,
     button_mask: np.ndarray,
 ) -> np.ndarray:
+    """Compute induced button charge for every beam position.
+
+    Physics reference:
+        `README.md` Eq. (1.7), which gives the discrete BEM inversion for the
+        induced surface charge density.
+
+    Args:
+        beam_xy_mm:
+            Beam positions of shape ``(Npoints, 2)`` in mm.
+        boundary:
+            Discrete chamber boundary.
+        green_inv:
+            Precomputed inverse of the BEM influence matrix.
+        button_mask:
+            Boolean array of shape ``(4, Nsegments)`` describing which boundary
+            elements belong to each button.
+
+    Returns:
+        Array of shape ``(4, Npoints)`` containing one induced charge per button
+        for each beam position.
+    """
     # README Eq. (1.6): [sigma_j] = -rho0 [G_ij]^-1 [G_i0].
     #
     # Distances from each beam point to each boundary-element midpoint define G_i0.
@@ -214,6 +398,27 @@ def button_difference_coordinates(
     labels: list[str],
     layout: str = "corners",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Convert button charges into normalized BPM coordinates.
+
+    Physics reference:
+        `README.md` Eq. (1.8a) for ``corners`` layout and Eq. (1.8b) for
+        ``cardinal`` layout.
+
+    Args:
+        button_charge:
+            Button charge array of shape ``(4, Npoints)``.
+        labels:
+            Button labels in the same order as the first axis of ``button_charge``.
+        layout:
+            Either ``corners`` or ``cardinal``.
+
+    Returns:
+        Tuple ``(dx, dy, total)`` where:
+
+        - ``dx`` is the normalized horizontal difference-over-sum value
+        - ``dy`` is the normalized vertical difference-over-sum value
+        - ``total`` is the total pickup signal used in the denominator
+    """
     label_to_idx = {label.upper(): idx for idx, label in enumerate(labels)}
     layout_norm = layout.lower()
 
@@ -268,6 +473,22 @@ def fit_scale_factors(
     dy: np.ndarray,
     fit_half_range_mm: float,
 ) -> tuple[float, float]:
+    """Fit linear BPM scale factors near the origin.
+
+    Physics reference:
+        `README.md` Eq. (1.9), where ``X = Kx * Dx`` and ``Y = Ky * Dy``.
+
+    Args:
+        beam_xy_mm:
+            True beam positions in mm.
+        dx, dy:
+            Normalized BPM coordinates from :func:`button_difference_coordinates`.
+        fit_half_range_mm:
+            Half-range around the origin used for the linear fit.
+
+    Returns:
+        Tuple ``(Kx_mm, Ky_mm)`` in mm.
+    """
     # README Eq. (1.8): X = Kx * Dx, Y = Ky * Dy near the origin.
     #
     # The slopes dDx/dx and dDy/dy are fitted from the central scan lines, and Kx/Ky
@@ -280,6 +501,17 @@ def fit_scale_factors(
 
 
 def polynomial_terms(x: np.ndarray, y: np.ndarray, order: int) -> np.ndarray:
+    """Construct the 2D polynomial basis used for nonlinear BPM correction.
+
+    Args:
+        x, y:
+            Measured BPM coordinates.
+        order:
+            Maximum polynomial order in each variable.
+
+    Returns:
+        Design matrix whose columns are the basis terms ``x^i y^j``.
+    """
     columns = []
     for i in range(order + 1):
         for j in range(order + 1):
@@ -288,6 +520,22 @@ def polynomial_terms(x: np.ndarray, y: np.ndarray, order: int) -> np.ndarray:
 
 
 def fit_polynomial_map(measured_xy_mm: np.ndarray, true_xy_mm: np.ndarray, order: int) -> tuple[np.ndarray, np.ndarray]:
+    """Fit the nonlinear map from measured BPM coordinates to true beam position.
+
+    Physics reference:
+        `README.md` Eq. (1.10).
+
+    Args:
+        measured_xy_mm:
+            Raw BPM coordinates ``(X, Y)`` in mm.
+        true_xy_mm:
+            True beam coordinates ``(x, y)`` in mm.
+        order:
+            Polynomial order used for the 2D correction map.
+
+    Returns:
+        Tuple of coefficient vectors ``(coef_x, coef_y)``.
+    """
     # README Eq. (1.9): x(X,Y), y(X,Y) are represented by a 2D polynomial basis and
     # fitted in a least-squares sense from measured coordinates back to true coordinates.
     basis = polynomial_terms(measured_xy_mm[:, 0], measured_xy_mm[:, 1], order)
@@ -297,11 +545,38 @@ def fit_polynomial_map(measured_xy_mm: np.ndarray, true_xy_mm: np.ndarray, order
 
 
 def apply_polynomial_map(measured_xy_mm: np.ndarray, coef_x: np.ndarray, coef_y: np.ndarray, order: int) -> np.ndarray:
+    """Evaluate the fitted nonlinear BPM correction map.
+
+    Args:
+        measured_xy_mm:
+            Raw BPM coordinates.
+        coef_x, coef_y:
+            Polynomial coefficient vectors produced by
+            :func:`fit_polynomial_map`.
+        order:
+            Polynomial order used to construct the basis.
+
+    Returns:
+        Corrected coordinates of shape ``(Npoints, 2)`` in mm.
+    """
     basis = polynomial_terms(measured_xy_mm[:, 0], measured_xy_mm[:, 1], order)
     return np.column_stack([basis @ coef_x, basis @ coef_y])
 
 
 def beam_grid_points(cfg: dict[str, Any], boundary: Boundary, chamber_cfg: dict[str, Any]) -> np.ndarray:
+    """Generate the rectangular transverse beam grid requested by the YAML file.
+
+    Args:
+        cfg:
+            The ``beam_grid`` block from YAML.
+        boundary:
+            Discrete chamber boundary.
+        chamber_cfg:
+            Chamber block from YAML.
+
+    Returns:
+        Array of beam positions in mm that lie inside the chamber.
+    """
     x_half = float(cfg["x_half_size_mm"])
     y_half = float(cfg["y_half_size_mm"])
     nx = int(cfg["nx"])
@@ -314,6 +589,18 @@ def beam_grid_points(cfg: dict[str, Any], boundary: Boundary, chamber_cfg: dict[
 
 
 def build_line_density(bunch_cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    """Build the normalized longitudinal line-charge density on a uniform z grid.
+
+    Physics reference:
+        `README.md` Eq. (1.2) for charge normalization.
+
+    Args:
+        bunch_cfg:
+            The ``bunch`` block from YAML, or a compatible override dictionary.
+
+    Returns:
+        Tuple ``(z_m, line_density_c_per_m)``.
+    """
     grid_cfg = bunch_cfg.get("longitudinal_grid", {})
     dz_mm = float(grid_cfg.get("dz_mm", 0.25))
     charge_c = float(bunch_cfg["charge_nC"]) * 1e-9
@@ -359,6 +646,19 @@ def build_line_density(bunch_cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarra
 
 
 def parse_density_samples(samples: Any) -> tuple[np.ndarray, np.ndarray]:
+    """Parse arbitrary longitudinal density samples from any supported YAML form.
+
+    Supported formats are documented in `README.md` Section 2.2.
+
+    Args:
+        samples:
+            Either a compact string, list of ``[z, value]`` pairs, or list of
+            ``{z_mm, peakcurrent}`` mappings.
+
+    Returns:
+        Tuple ``(sample_z_mm, sample_values)`` sorted by increasing ``z`` with
+        duplicate ``z`` values removed.
+    """
     if isinstance(samples, str):
         matches = re.findall(
             r"\{\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*,\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*\}",
@@ -405,6 +705,20 @@ def parse_density_samples(samples: Any) -> tuple[np.ndarray, np.ndarray]:
 
 
 def button_width_kernel(z_m: np.ndarray, radius_mm: float) -> np.ndarray:
+    """Evaluate the longitudinal button-width kernel.
+
+    Physics reference:
+        `README.md` Eq. (1.1): ``w(z) = 2 * sqrt(r_b^2 - z^2)``.
+
+    Args:
+        z_m:
+            Longitudinal coordinate array in meters.
+        radius_mm:
+            Button radius in mm.
+
+    Returns:
+        Width kernel array in meters.
+    """
     # README Eq. (1.1): w(z) = 2 * sqrt(r_b^2 - z^2) inside the button projection.
     radius_m = radius_mm * 1e-3
     kernel = np.zeros_like(z_m)
@@ -414,10 +728,23 @@ def button_width_kernel(z_m: np.ndarray, radius_mm: float) -> np.ndarray:
 
 
 def nearest_pow2(n: int) -> int:
+    """Return the smallest power of two greater than or equal to ``n``."""
     return 1 << int(math.ceil(math.log2(max(2, n))))
 
 
 def apply_frequency_response(signal_t: np.ndarray, response: np.ndarray) -> np.ndarray:
+    """Apply a real frequency-domain transfer function to a time signal.
+
+    Args:
+        signal_t:
+            Real-valued time-domain signal.
+        response:
+            Real or complex one-sided FFT response sampled on the target
+            frequency grid.
+
+    Returns:
+        Filtered time-domain signal with the same length as the input.
+    """
     n_fft = 2 * (len(response) - 1)
     spectrum = np.fft.rfft(signal_t, n=n_fft)
     filtered = np.fft.irfft(spectrum * response, n=n_fft)
@@ -429,6 +756,26 @@ def build_signal_base(
     cfg: dict[str, Any],
     bunch_override: dict[str, Any] | None = None,
 ) -> dict[str, np.ndarray | float]:
+    """Build the signal chain up to the cable output, before analog filtering.
+
+    Physics reference:
+        - `README.md` Eq. (1.2): line-density normalization
+        - `README.md` Eq. (1.3): image charge convolution
+        - `README.md` Eq. (1.4): image current derivative
+        - `README.md` Eq. (1.5): button impedance
+
+    Args:
+        boundary:
+            Discrete chamber boundary.
+        cfg:
+            Full YAML configuration.
+        bunch_override:
+            Optional bunch block used for comparison cases such as Fig. 9.
+
+    Returns:
+        Dictionary containing longitudinal arrays, spectra, impedance, and cable
+        output needed by later plotting functions.
+    """
     bunch_cfg = copy.deepcopy(cfg["bunch"])
     if bunch_override:
         bunch_cfg.update(bunch_override)
@@ -494,6 +841,17 @@ def build_signal_base(
 
 
 def build_analog_sos(dt: float, analog_cfg: dict[str, Any]) -> np.ndarray | None:
+    """Create the Butterworth SOS representation for one analog filter.
+
+    Args:
+        dt:
+            Time step in seconds.
+        analog_cfg:
+            Filter definition from YAML.
+
+    Returns:
+        Second-order-sections array, or ``None`` for ``type: none``.
+    """
     analog_type = analog_cfg.get("type", "none").lower()
     if analog_type == "none":
         return None
@@ -512,6 +870,19 @@ def build_analog_sos(dt: float, analog_cfg: dict[str, Any]) -> np.ndarray | None
 
 
 def apply_analog_filter(v_cable: np.ndarray, dt: float, analog_cfg: dict[str, Any]) -> np.ndarray:
+    """Apply the configured analog filter to the cable-output waveform.
+
+    Args:
+        v_cable:
+            Cable-output signal in volts.
+        dt:
+            Time step in seconds.
+        analog_cfg:
+            Filter configuration block.
+
+    Returns:
+        Filtered voltage waveform.
+    """
     sos = build_analog_sos(dt, analog_cfg)
     if sos is None:
         return v_cable
@@ -519,6 +890,19 @@ def apply_analog_filter(v_cable: np.ndarray, dt: float, analog_cfg: dict[str, An
 
 
 def analog_transfer_abs(freqs_hz: np.ndarray, dt: float, analog_cfg: dict[str, Any]) -> np.ndarray:
+    """Evaluate the analog-filter amplitude response on a chosen frequency grid.
+
+    Args:
+        freqs_hz:
+            Frequency samples in Hz.
+        dt:
+            Time step in seconds.
+        analog_cfg:
+            Filter configuration block.
+
+    Returns:
+        Absolute transfer-function magnitude ``|H(f)|``.
+    """
     sos = build_analog_sos(dt, analog_cfg)
     if sos is None:
         return np.ones_like(freqs_hz)
@@ -527,6 +911,18 @@ def analog_transfer_abs(freqs_hz: np.ndarray, dt: float, analog_cfg: dict[str, A
 
 
 def signal_chain(boundary: Boundary, cfg: dict[str, Any]) -> dict[str, np.ndarray | float]:
+    """Build the full default signal chain including the primary analog filter.
+
+    Args:
+        boundary:
+            Discrete chamber boundary.
+        cfg:
+            Full YAML configuration.
+
+    Returns:
+        Dictionary containing the base signal-chain data plus the field
+        ``filtered_voltage_v`` for the main configured analog filter.
+    """
     base = build_signal_base(boundary, cfg)
     analog_cfg = cfg["filter"].get("analog", {"type": "none"})
     v_filtered = apply_analog_filter(np.asarray(base["cable_voltage_v"]), float(base["dt_s"]), analog_cfg)
@@ -534,6 +930,20 @@ def signal_chain(boundary: Boundary, cfg: dict[str, Any]) -> dict[str, np.ndarra
 
 
 def resolution_curves(kx_mm: float, ky_mm: float, resolution_cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Generate the BPM resolution curves versus relative voltage error.
+
+    Physics reference:
+        `README.md` Eq. (1.11).
+
+    Args:
+        kx_mm, ky_mm:
+            BPM scale factors in mm.
+        resolution_cfg:
+            ``filter.resolution`` block from YAML.
+
+    Returns:
+        Tuple ``(relative_error, sigma_x_mm, sigma_y_mm)``.
+    """
     # README Eq. (1.10): sigma_x ~= Kx * sigma_V / (2V), sigma_y ~= Ky * sigma_V / (2V).
     rel = np.logspace(
         math.log10(float(resolution_cfg.get("relative_error_min", 1e-4))),
@@ -546,6 +956,18 @@ def resolution_curves(kx_mm: float, ky_mm: float, resolution_cfg: dict[str, Any]
 
 
 def plot_boundary(ax: plt.Axes, boundary: Boundary, button_masks_arr: np.ndarray, button_colors: list[str]) -> None:
+    """Draw the chamber boundary and highlight button-covered boundary segments.
+
+    Args:
+        ax:
+            Target Matplotlib axes.
+        boundary:
+            Discrete chamber boundary.
+        button_masks_arr:
+            Boolean boundary-element masks for each button.
+        button_colors:
+            Display color for each button.
+    """
     closed = close_boundary(boundary.points)
     ax.plot(closed[:, 0], closed[:, 1], color="black", linewidth=1.5, zorder=1)
     for mask, color in zip(button_masks_arr, button_colors):
@@ -563,6 +985,20 @@ def plot_linearity(
     true_xy_mm: np.ndarray,
     measured_xy_mm: np.ndarray,
 ) -> None:
+    """Plot the Fig. 11 style raw BPM linearity map.
+
+    Args:
+        output_path:
+            Target image file.
+        boundary:
+            Chamber boundary to draw.
+        button_masks_arr, button_colors:
+            Button geometry overlays.
+        true_xy_mm:
+            True input beam grid in mm.
+        measured_xy_mm:
+            Raw linear BPM reconstruction in mm.
+    """
     fig, ax = plt.subplots(figsize=(8.5, 5.0))
     plot_boundary(ax, boundary, button_masks_arr, button_colors)
     ax.scatter(true_xy_mm[:, 0], true_xy_mm[:, 1], s=8, color="royalblue", marker="s", linewidths=0.0, label="input")
@@ -585,6 +1021,7 @@ def plot_polyfit(
     true_xy_mm: np.ndarray,
     fit_xy_mm: np.ndarray,
 ) -> None:
+    """Plot the Fig. 12 style polynomial-corrected BPM map."""
     fig, ax = plt.subplots(figsize=(8.5, 5.0))
     plot_boundary(ax, boundary, button_masks_arr, button_colors)
     ax.scatter(true_xy_mm[:, 0], true_xy_mm[:, 1], s=8, color="royalblue", marker="s", linewidths=0.0, label="input")
@@ -600,6 +1037,7 @@ def plot_polyfit(
 
 
 def plot_resolution(output_path: Path, rel: np.ndarray, sigma_x: np.ndarray, sigma_y: np.ndarray) -> None:
+    """Plot the Fig. 13 style BPM resolution curves."""
     fig, ax = plt.subplots(figsize=(6.4, 4.8))
     ax.loglog(rel, sigma_x, color="royalblue", linewidth=1.8, label="hor")
     ax.loglog(rel, sigma_y, color="crimson", linewidth=1.8, label="ver")
@@ -613,6 +1051,7 @@ def plot_resolution(output_path: Path, rel: np.ndarray, sigma_x: np.ndarray, sig
 
 
 def plot_signal_summary(output_path: Path, signal_data: dict[str, np.ndarray | float]) -> None:
+    """Generate a compact two-panel summary of the longitudinal signal chain."""
     z_mm = np.asarray(signal_data["z_m"]) * 1e3
     t_ns = np.asarray(signal_data["t_s"]) * 1e9
     image_current_ma = 1e3 * np.asarray(signal_data["image_current_a"])
@@ -641,6 +1080,7 @@ def plot_signal_summary(output_path: Path, signal_data: dict[str, np.ndarray | f
 
 
 def plot_fig3_impedance_current_spectrum(output_path: Path, signal_data: dict[str, np.ndarray | float]) -> None:
+    """Plot BAR-like Fig. 3: button impedance and FFT magnitude of image current."""
     f_ghz = np.asarray(signal_data["freqs_hz"]) * 1e-9
     z_abs = np.asarray(signal_data["button_impedance_ohm_abs"])
     i_abs = 1e3 * np.asarray(signal_data["image_current_fft_abs"])
@@ -662,6 +1102,7 @@ def plot_fig3_impedance_current_spectrum(output_path: Path, signal_data: dict[st
 
 
 def plot_fig4_current_voltage(output_path: Path, signal_data: dict[str, np.ndarray | float]) -> None:
+    """Plot BAR-like Fig. 4: image current and button voltage versus time."""
     t_ns = np.asarray(signal_data["t_s"]) * 1e9
     i_ma = 1e3 * np.asarray(signal_data["image_current_a"])
     v_b = np.asarray(signal_data["button_voltage_v"])
@@ -682,6 +1123,7 @@ def plot_fig4_current_voltage(output_path: Path, signal_data: dict[str, np.ndarr
 
 
 def plot_fig5_cable_io(output_path: Path, signal_data: dict[str, np.ndarray | float]) -> None:
+    """Plot BAR-like Fig. 5: button voltage at cable input and output."""
     t_ns = np.asarray(signal_data["t_s"]) * 1e9
     v_b = np.asarray(signal_data["button_voltage_v"])
     v_c = np.asarray(signal_data["cable_voltage_v"])
@@ -703,6 +1145,14 @@ def plot_fig7_frequency_filters(
     signal_data: dict[str, np.ndarray | float],
     comparison_filters: list[dict[str, Any]],
 ) -> None:
+    """Plot BAR-like Fig. 7 for one or more comparison filters.
+
+    Each subplot shows:
+    - FFT amplitude of the button voltage
+    - FFT amplitude after the cable
+    - FFT amplitude after one comparison filter
+    - the filter amplitude response ``|H|``
+    """
     if not comparison_filters:
         return
     f_ghz = np.asarray(signal_data["freqs_hz"]) * 1e-9
@@ -740,6 +1190,7 @@ def plot_fig8_filter_outputs(
     signal_data: dict[str, np.ndarray | float],
     comparison_filters: list[dict[str, Any]],
 ) -> None:
+    """Plot BAR-like Fig. 8: time-domain outputs of comparison filters."""
     if not comparison_filters:
         return
     t_ns = np.asarray(signal_data["t_s"]) * 1e9
@@ -765,6 +1216,19 @@ def plot_fig9_button_voltage_cases(
     cfg: dict[str, Any],
     signal_cases: list[dict[str, Any]],
 ) -> None:
+    """Plot BAR-like Fig. 9 for multiple charge/length comparison cases.
+
+    Args:
+        output_path:
+            Target image file.
+        boundary:
+            Chamber boundary used by the signal model.
+        cfg:
+            Full YAML configuration.
+        signal_cases:
+            List of case dictionaries, each containing a name, charge, and
+            density block override.
+    """
     if not signal_cases:
         return
     fig, ax = plt.subplots(figsize=(6.8, 4.8))
@@ -786,6 +1250,17 @@ def plot_fig9_button_voltage_cases(
 
 
 def residual_metrics(reference_xy_mm: np.ndarray, estimate_xy_mm: np.ndarray) -> tuple[float, float]:
+    """Compute RMS and max position error between two point clouds.
+
+    Args:
+        reference_xy_mm:
+            Ground-truth coordinates in mm.
+        estimate_xy_mm:
+            Reconstructed coordinates in mm.
+
+    Returns:
+        Tuple ``(rms_error_mm, max_error_mm)``.
+    """
     err = np.linalg.norm(estimate_xy_mm - reference_xy_mm, axis=1)
     return float(np.sqrt(np.mean(err**2))), float(np.max(err))
 
@@ -804,6 +1279,28 @@ def write_report(
     signal_data: dict[str, np.ndarray | float],
     reference_rel_error: float,
 ) -> None:
+    """Write the Markdown summary report for one completed run.
+
+    Args:
+        output_path:
+            Destination Markdown file.
+        cfg_path:
+            YAML path used for the run.
+        cfg:
+            Full parsed YAML configuration.
+        boundary:
+            Chamber boundary description.
+        kx_mm, ky_mm:
+            BPM scale factors.
+        linear_rms_mm, linear_max_mm:
+            Raw BPM reconstruction errors.
+        poly_rms_mm, poly_max_mm:
+            Polynomial-corrected reconstruction errors.
+        signal_data:
+            Signal-chain results from :func:`signal_chain`.
+        reference_rel_error:
+            Reference ``sigma_V / V`` point for the resolution summary.
+    """
     cfg_filter = cfg.get("filter", {})
     v_filtered = np.asarray(signal_data["filtered_voltage_v"])
     v_button = np.asarray(signal_data["button_voltage_v"])
@@ -869,6 +1366,20 @@ def write_report(
 
 
 def run(cfg_path: Path) -> dict[str, Path]:
+    """Execute one complete BPM analysis run from a YAML file.
+
+    This is the main orchestration function for the script. It loads the config,
+    builds the chamber model, runs the BEM solve, computes the signal chain,
+    generates all enabled figures, writes the report, and returns the output file
+    paths.
+
+    Args:
+        cfg_path:
+            Path to the YAML input file.
+
+    Returns:
+        Dictionary mapping logical output names to generated file paths.
+    """
     cfg = load_config(cfg_path)
     output_dir = Path(cfg.get("output", {}).get("directory", "outputs/default"))
     if not output_dir.is_absolute():
@@ -959,6 +1470,7 @@ def run(cfg_path: Path) -> dict[str, Path]:
 
 
 def main() -> None:
+    """CLI entry point."""
     parser = argparse.ArgumentParser(description="BAR BPM boundary-element analysis and figure generation.")
     parser.add_argument("config", type=Path, help="Path to the YAML input file.")
     args = parser.parse_args()
