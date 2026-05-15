@@ -12,15 +12,15 @@
 - Linear scale factor `Ky`: 36.254 mm
 - RMS position error before polynomial correction: 5232.18 um
 - Max position error before polynomial correction: 8.819 mm
-- RMS position error after polynomial correction: 2594.70 um
-- Max position error after polynomial correction: 6.861 mm
+- RMS position error after polynomial correction: 2594.69 um
+- Max position error after polynomial correction: 6.835 mm
 
 ## Signal Summary
 
-- Peak voltage at button output: 5.141e-03 V
-- Peak voltage after cable model: 2.834e-04 V
-- Peak voltage after analog filter: 2.250e-04 V
-- RMS voltage after analog filter: 2.250e-04 V
+- Peak voltage at button output: 6.581e-03 V
+- Peak voltage after cable model: 5.292e-04 V
+- Peak voltage after analog filter: 4.926e-04 V
+- RMS voltage after analog filter: 4.926e-04 V
 
 ## Resolution
 

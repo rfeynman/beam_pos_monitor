@@ -1,24 +1,6 @@
 bunch:
-  charge_nC: 1.0
-  density:
-    # Use one of: gaussian, array
-    kind: gaussian
-
-    # Gaussian option:
-    sigma_mm: 2.0
-    cutoff_sigma: 0.0
-
-    # Arbitrary density option:
-    # kind: array
-    # Compact string form accepted by the parser:
-    # samples: "{{-120,0.15},{-60,0.8},{0,1},{60,0.8},{120,0.15}}"
-    #
-    # Also accepted:
-    # samples: [[-120, 0.15], [-60, 0.8], [0, 1], [60, 0.8], [120, 0.15]]
-    interpolation_order: 5
-
   longitudinal_grid:
-    dz_mm: 0.02
+    grid_number: 200
     no_cut_span_sigma: 8.0
 
 chamber:
@@ -70,28 +52,48 @@ buttons:
 
 filter:
   characteristic_impedance_ohm: 50.0
-
   cable:
     enabled: true
     attenuation_fc_hz: 4.65e8
-
   analog:
-    # Use one of: none, lowpass_butter, bandpass_butter
     type: lowpass_butter
     order: 4
     cutoff_hz: 1.3e8
-
-    # Band-pass example:
-    # type: bandpass_butter
-    # order: 2
-    # center_hz: 5.0e8
-    # bandwidth_hz: 2.0e7
-
+  comparison_filters:
+    - name: LPF 130MHz
+      type: lowpass_butter
+      order: 4
+      cutoff_hz: 1.3e8
+    - name: BPF 500MHz
+      type: bandpass_butter
+      order: 2
+      center_hz: 5.0e8
+      bandwidth_hz: 2.0e7
   resolution:
     relative_error_min: 1.0e-4
     relative_error_max: 1.0e-2
     num_points: 200
     reference_relative_error: 1.6e-3
+
+signal_cases:
+  - name: 1nC, 1mm
+    charge_nC: 1.0
+    density:
+      kind: gaussian
+      sigma_mm: 1.0
+      cutoff_sigma: 0.0
+  - name: 2nC, 10mm
+    charge_nC: 2.0
+    density:
+      kind: gaussian
+      sigma_mm: 10.0
+      cutoff_sigma: 0.0
+  - name: 1nC, 50mm
+    charge_nC: 1.0
+    density:
+      kind: gaussian
+      sigma_mm: 50.0
+      cutoff_sigma: 0.0
 
 beam_grid:
   x_half_size_mm: 30.0

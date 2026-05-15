@@ -602,13 +602,16 @@ def build_line_density(bunch_cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarra
         Tuple ``(z_m, line_density_c_per_m)``.
     """
     grid_cfg = bunch_cfg.get("longitudinal_grid", {})
-    dz_mm = float(grid_cfg.get("dz_mm", 0.25))
+    grid_number = int(grid_cfg.get("grid_number", 200))
+    if grid_number <= 0:
+        raise ValueError("`bunch.longitudinal_grid.grid_number` must be a positive integer.")
     charge_c = float(bunch_cfg["charge_nC"]) * 1e-9
     density_cfg = bunch_cfg["density"]
     kind = density_cfg["kind"].lower()
 
     if kind == "gaussian":
         sigma_mm = float(density_cfg["sigma_mm"])
+        dz_mm = sigma_mm / grid_number
         cutoff_sigma = float(density_cfg.get("cutoff_sigma", 0.0))
         if cutoff_sigma > 0.0:
             z_max = cutoff_sigma * sigma_mm
@@ -619,6 +622,8 @@ def build_line_density(bunch_cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarra
     elif kind == "array":
         samples = density_cfg["samples"]
         sample_z, sample_i = parse_density_samples(samples)
+        span_mm = sample_z.max() - sample_z.min()
+        dz_mm = span_mm / grid_number if span_mm > 0.0 else 1.0
         z_mm = np.arange(sample_z.min(), sample_z.max() + dz_mm, dz_mm)
         order_request = int(density_cfg.get("interpolation_order", 5))
         spline_order = min(order_request, len(sample_z) - 1)
@@ -776,7 +781,7 @@ def build_signal_base(
         Dictionary containing longitudinal arrays, spectra, impedance, and cable
         output needed by later plotting functions.
     """
-    bunch_cfg = copy.deepcopy(cfg["bunch"])
+    bunch_cfg = resolve_default_bunch_cfg(cfg)
     if bunch_override:
         bunch_cfg.update(bunch_override)
 
@@ -838,6 +843,32 @@ def build_signal_base(
         "characteristic_impedance_ohm": z0,
         "cable_transfer_abs": response,
     }
+
+
+def resolve_default_bunch_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Resolve the default bunch definition used by the main signal chain.
+
+    Rule:
+        If ``signal_cases`` exists and is non-empty, the first entry provides the
+        default ``charge_nC`` and ``density``. The shared
+        ``bunch.longitudinal_grid`` block still comes from the top-level
+        ``bunch`` section. If ``signal_cases`` is absent, the full top-level
+        ``bunch`` block is used directly.
+
+    Args:
+        cfg:
+            Full YAML configuration.
+
+    Returns:
+        Effective bunch configuration dictionary.
+    """
+    bunch_cfg = copy.deepcopy(cfg["bunch"])
+    signal_cases = cfg.get("signal_cases", [])
+    if signal_cases:
+        first_case = signal_cases[0]
+        bunch_cfg["charge_nC"] = first_case["charge_nC"]
+        bunch_cfg["density"] = copy.deepcopy(first_case["density"])
+    return bunch_cfg
 
 
 def build_analog_sos(dt: float, analog_cfg: dict[str, Any]) -> np.ndarray | None:
@@ -1318,7 +1349,8 @@ def write_report(
         notes.append(
             "The sample polygon was taken from the BAR note figures because `BeampositionMonitor.gdf` was not found in the local Research tree."
         )
-    if cfg["bunch"]["density"]["kind"].lower() == "gaussian" and float(cfg["bunch"]["density"].get("cutoff_sigma", 0.0)) == 0.0:
+    effective_bunch = resolve_default_bunch_cfg(cfg)
+    if effective_bunch["density"]["kind"].lower() == "gaussian" and float(effective_bunch["density"].get("cutoff_sigma", 0.0)) == 0.0:
         notes.append("The uncapped Gaussian is evaluated on a finite numerical window set by `bunch.longitudinal_grid.no_cut_span_sigma`.")
 
     lines = [

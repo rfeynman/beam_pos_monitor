@@ -17,10 +17,10 @@
 
 ## Signal Summary
 
-- Peak voltage at button output: 8.978e-04 V
-- Peak voltage after cable model: 2.466e-04 V
-- Peak voltage after analog filter: 1.658e-08 V
-- RMS voltage after analog filter: 7.463e-09 V
+- Peak voltage at button output: 8.988e-04 V
+- Peak voltage after cable model: 2.469e-04 V
+- Peak voltage after analog filter: 1.662e-08 V
+- RMS voltage after analog filter: 7.478e-09 V
 
 ## Resolution
 
