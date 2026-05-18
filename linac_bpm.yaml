@@ -55,7 +55,6 @@ filter:
   cable:
     enabled: true
     attenuation_fc_hz: 4.65e8
-    skin_effect_phase: true
   analog:
     type: lowpass_butter
     order: 4

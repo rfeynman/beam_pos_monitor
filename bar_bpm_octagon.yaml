@@ -3,6 +3,11 @@ bunch:
     grid_number: 200
     no_cut_span_sigma: 8.0
 
+signal_model:
+  # BAR BPM.pdf follows the SLAC button formula q_img = integral rho*w dz/(2*pi*b).
+  # For the octagonal BAR chamber in Table 1, b is the 20 mm half-height.
+  image_charge_denominator_mm: 125.6637061436
+
 chamber:
   kind: polygon
   # Approximate BAR octagon inferred from Fig. 1 and Fig. 11 of BAR BPM.pdf.
@@ -42,8 +47,13 @@ filter:
   characteristic_impedance_ohm: 50.0
   cable:
     enabled: true
-    # exp(-sqrt(f / fc)) model.
+    # BAR BPM.pdf Fig. 5 uses a 50 m LMR240 cable quoted as
+    # 18 dB/100 m at 500 MHz. For 50 m this is 9 dB at 500 MHz,
+    # giving fc ~= 4.65e8 Hz in exp(-sqrt(f / fc)).
     attenuation_fc_hz: 4.65e8
+    # Include the skin-effect phase term exp(-i*sqrt(f/fc)) so the
+    # cable output is delayed relative to the button input, as in Fig. 5.
+    skin_effect_phase: true
   analog:
     type: bandpass_butter
     order: 2
@@ -51,7 +61,7 @@ filter:
     bandwidth_hz: 2.0e7
   comparison_filters:
     - name: LPF 70MHz
-      type: lowpass_butter
+      type: lowpass_bessel
       order: 4
       cutoff_hz: 7.0e7
     - name: BPF 500MHz

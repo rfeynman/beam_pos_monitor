@@ -3,6 +3,7 @@
 - Config: `/Users/wange/Coding/Python/bpm/bar_bpm_octagon.yaml`
 - Chamber type: `polygon`
 - Boundary perimeter: 201.244 mm
+- Longitudinal image-charge denominator: 125.664 mm
 - Button capacitance used in signal model: 3.400 pF
 - Characteristic impedance: 50.0 ohm
 
@@ -17,10 +18,10 @@
 
 ## Signal Summary
 
-- Peak voltage at button output: 8.988e-04 V
-- Peak voltage after cable model: 2.469e-04 V
-- Peak voltage after analog filter: 1.662e-08 V
-- RMS voltage after analog filter: 7.478e-09 V
+- Peak voltage at button output: 1.439e+00 V
+- Peak voltage after cable model: 4.704e-01 V
+- Peak voltage after analog filter: 1.601e-02 V
+- RMS voltage after analog filter: 3.702e-03 V
 
 ## Resolution
 
@@ -32,4 +33,3 @@
 
 - The sample polygon was taken from the BAR note figures because `BeampositionMonitor.gdf` was not found in the local Research tree.
 - The uncapped Gaussian is evaluated on a finite numerical window set by `bunch.longitudinal_grid.no_cut_span_sigma`.
-- The configured band-pass filter suppresses most of the long-bunch spectrum, so the filtered time-domain voltage is very small.

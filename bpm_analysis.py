@@ -38,8 +38,8 @@ by the YAML file. Typical outputs include:
 Version metadata
 ----------------
 - Initialized date: 2026-05-05
-- Last updated: 2026-05-13
-- Version: 0.6.0
+- Last updated: 2026-05-18
+- Version: 0.6.1
 
 Maintenance note
 ----------------
@@ -67,7 +67,7 @@ from matplotlib.path import Path as MplPath
 from numpy.polynomial.legendre import leggauss
 from scipy import constants
 from scipy.interpolate import InterpolatedUnivariateSpline, interp1d
-from scipy.signal import butter, sosfiltfilt, sosfreqz
+from scipy.signal import bessel, butter, sosfilt, sosfreqz
 
 matplotlib.use("Agg")
 
@@ -310,7 +310,7 @@ def build_green_matrix(boundary: Boundary, quad_order: int = 8) -> np.ndarray:
     """Assemble the boundary-element Green influence matrix.
 
     Physics reference:
-        `README.md` Eq. (1.6) and Eq. (1.7).
+        `README.md` Eq. (1.7) and Eq. (1.8).
 
     Args:
         boundary:
@@ -323,7 +323,7 @@ def build_green_matrix(boundary: Boundary, quad_order: int = 8) -> np.ndarray:
         Square matrix ``G_ij`` whose entries are the logarithmic kernel line
         integrals between boundary elements.
     """
-    # README Eq. (1.5): G(r, r') = (1 / 2 pi epsilon0) ln(1 / |r - r'|).
+    # README Eq. (1.7): G(r, r') = (1 / 2 pi epsilon0) ln(1 / |r - r'|).
     #
     # The common factor 1 / (2 pi epsilon0) is omitted here because it cancels in the
     # zero-potential boundary solve. We keep only the logarithmic kernel and its line
@@ -361,7 +361,7 @@ def compute_button_charges(
     """Compute induced button charge for every beam position.
 
     Physics reference:
-        `README.md` Eq. (1.7), which gives the discrete BEM inversion for the
+        `README.md` Eq. (1.8), which gives the discrete BEM inversion for the
         induced surface charge density.
 
     Args:
@@ -379,7 +379,7 @@ def compute_button_charges(
         Array of shape ``(4, Npoints)`` containing one induced charge per button
         for each beam position.
     """
-    # README Eq. (1.6): [sigma_j] = -rho0 [G_ij]^-1 [G_i0].
+    # README Eq. (1.8): [sigma_j] = -rho0 [G_ij]^-1 [G_i0].
     #
     # Distances from each beam point to each boundary-element midpoint define G_i0.
     # Multiplying by the precomputed inverse influence matrix yields the boundary
@@ -401,7 +401,7 @@ def button_difference_coordinates(
     """Convert button charges into normalized BPM coordinates.
 
     Physics reference:
-        `README.md` Eq. (1.8a) for ``corners`` layout and Eq. (1.8b) for
+        `README.md` Eq. (1.9a) for ``corners`` layout and Eq. (1.9b) for
         ``cardinal`` layout.
 
     Args:
@@ -476,7 +476,7 @@ def fit_scale_factors(
     """Fit linear BPM scale factors near the origin.
 
     Physics reference:
-        `README.md` Eq. (1.9), where ``X = Kx * Dx`` and ``Y = Ky * Dy``.
+        `README.md` Eq. (1.10), where ``X = Kx * Dx`` and ``Y = Ky * Dy``.
 
     Args:
         beam_xy_mm:
@@ -489,7 +489,7 @@ def fit_scale_factors(
     Returns:
         Tuple ``(Kx_mm, Ky_mm)`` in mm.
     """
-    # README Eq. (1.8): X = Kx * Dx, Y = Ky * Dy near the origin.
+    # README Eq. (1.10): X = Kx * Dx, Y = Ky * Dy near the origin.
     #
     # The slopes dDx/dx and dDy/dy are fitted from the central scan lines, and Kx/Ky
     # are their inverses.
@@ -523,7 +523,7 @@ def fit_polynomial_map(measured_xy_mm: np.ndarray, true_xy_mm: np.ndarray, order
     """Fit the nonlinear map from measured BPM coordinates to true beam position.
 
     Physics reference:
-        `README.md` Eq. (1.10).
+        `README.md` Eq. (1.11).
 
     Args:
         measured_xy_mm:
@@ -536,7 +536,7 @@ def fit_polynomial_map(measured_xy_mm: np.ndarray, true_xy_mm: np.ndarray, order
     Returns:
         Tuple of coefficient vectors ``(coef_x, coef_y)``.
     """
-    # README Eq. (1.9): x(X,Y), y(X,Y) are represented by a 2D polynomial basis and
+    # README Eq. (1.11): x(X,Y), y(X,Y) are represented by a 2D polynomial basis and
     # fitted in a least-squares sense from measured coordinates back to true coordinates.
     basis = polynomial_terms(measured_xy_mm[:, 0], measured_xy_mm[:, 1], order)
     coef_x, *_ = np.linalg.lstsq(basis, true_xy_mm[:, 0], rcond=None)
@@ -737,6 +737,57 @@ def nearest_pow2(n: int) -> int:
     return 1 << int(math.ceil(math.log2(max(2, n))))
 
 
+def narrowest_filter_feature_hz(filters: list[dict[str, Any]]) -> float | None:
+    """Return the narrowest frequency feature that must be resolved in Fig. 7.
+
+    Args:
+        filters:
+            List of filter dictionaries from ``filter.comparison_filters``.
+
+    Returns:
+        Smallest useful bandwidth/cutoff in Hz, or ``None`` if the filters do
+        not define a frequency scale.
+    """
+    features: list[float] = []
+    for filt in filters:
+        filt_type = str(filt.get("type", "none")).lower()
+        if filt_type == "bandpass_butter" and "bandwidth_hz" in filt:
+            features.append(float(filt["bandwidth_hz"]))
+        elif filt_type in {"lowpass_butter", "lowpass_bessel"} and "cutoff_hz" in filt:
+            features.append(float(filt["cutoff_hz"]))
+    return min(features) if features else None
+
+
+def spectrum_fft_size_for_filters(n_signal: int, dt: float, filters: list[dict[str, Any]]) -> int:
+    """Choose a zero-padded FFT size fine enough for narrow filter plots.
+
+    The BAR Fig. 7 comparison includes a 20 MHz-wide BPF centered at 500 MHz.
+    With the long 62 mm bunch, the natural FFT grid can be tens of MHz per bin,
+    which misses the BPF passband peak and makes ``|H_BPF|`` appear much smaller
+    than the intended transfer function.  This helper makes the Fig. 7 spectrum
+    grid substantially finer than the narrowest cutoff/bandwidth while leaving
+    the time-domain signal model unchanged.
+
+    Args:
+        n_signal:
+            Number of time-domain samples in the voltage waveform.
+        dt:
+            Time step in seconds.
+        filters:
+            Comparison filters to plot.
+
+    Returns:
+        Power-of-two FFT length.
+    """
+    base_fft = nearest_pow2(max(n_signal, 2))
+    feature_hz = narrowest_filter_feature_hz(filters)
+    if feature_hz is None or feature_hz <= 0.0:
+        return base_fft
+    target_df_hz = feature_hz / 40.0
+    required = int(math.ceil(1.0 / (dt * target_df_hz)))
+    return nearest_pow2(max(base_fft, required))
+
+
 def apply_frequency_response(signal_t: np.ndarray, response: np.ndarray) -> np.ndarray:
     """Apply a real frequency-domain transfer function to a time signal.
 
@@ -756,6 +807,29 @@ def apply_frequency_response(signal_t: np.ndarray, response: np.ndarray) -> np.n
     return filtered[: len(signal_t)]
 
 
+def image_charge_denominator_m(boundary: Boundary, cfg: dict[str, Any]) -> float:
+    """Return the geometric denominator for longitudinal image charge.
+
+    The BAR/SLAC button formula uses ``2*pi*b`` in the denominator.  For a
+    non-round chamber this value is best supplied explicitly from the paper's
+    chamber dimension.  If no value is supplied, the code falls back to the
+    chamber perimeter used by the earlier generic model.
+
+    Args:
+        boundary:
+            Discrete chamber boundary, used for the fallback perimeter.
+        cfg:
+            Full YAML configuration.
+
+    Returns:
+        Denominator in meters.
+    """
+    signal_model = cfg.get("signal_model", {})
+    if "image_charge_denominator_mm" in signal_model:
+        return float(signal_model["image_charge_denominator_mm"]) * 1e-3
+    return boundary.perimeter * 1e-3
+
+
 def build_signal_base(
     boundary: Boundary,
     cfg: dict[str, Any],
@@ -768,6 +842,7 @@ def build_signal_base(
         - `README.md` Eq. (1.3): image charge convolution
         - `README.md` Eq. (1.4): image current derivative
         - `README.md` Eq. (1.5): button impedance
+        - `README.md` Eq. (1.6): skin-effect cable transfer
 
     Args:
         boundary:
@@ -787,10 +862,19 @@ def build_signal_base(
 
     z_m, line_density = build_line_density(bunch_cfg)
     dz = float(np.mean(np.diff(z_m)))
-    # README Eq. (1.3): q_img(t) is the convolution of the line-charge density with
-    # the button-width kernel, scaled here by the chamber perimeter fraction.
+    current_profile_a = constants.c * line_density
+    mean_z_m = float(np.trapz(z_m * line_density, z_m) / np.trapz(line_density, z_m))
+    sigma_z_m = math.sqrt(
+        max(
+            0.0,
+            float(np.trapz(((z_m - mean_z_m) ** 2) * line_density, z_m) / np.trapz(line_density, z_m)),
+        )
+    )
+    # README Eq. (1.2): q_img(t) is the convolution of the line-charge density with
+    # the button-width kernel, divided by the geometric image-charge denominator.
     width = button_width_kernel(z_m, float(cfg["buttons"]["radius_mm"]))
-    image_charge = np.convolve(line_density, width, mode="same") * dz / boundary.perimeter
+    image_denominator_m = image_charge_denominator_m(boundary, cfg)
+    image_charge = np.convolve(line_density, width, mode="same") * dz / image_denominator_m
     t_s = z_m / constants.c
     # README Eq. (1.4): I_img(t) = d q_img(t) / d t.
     image_current = np.gradient(image_charge, t_s)
@@ -818,10 +902,17 @@ def build_signal_base(
     v_button = np.fft.irfft(current_spec * z_button, n=n_fft)[: len(t_s)]
 
     cable_cfg = cfg["filter"].get("cable", {})
-    response = np.ones_like(freqs)
+    response = np.ones_like(freqs, dtype=complex)
     if cable_cfg.get("enabled", False):
         fc_hz = float(cable_cfg["attenuation_fc_hz"])
-        response *= np.exp(-np.sqrt(np.maximum(freqs, 0.0) / fc_hz))
+        sqrt_loss = np.sqrt(np.maximum(freqs, 0.0) / fc_hz)
+        include_phase = bool(cable_cfg.get("skin_effect_phase", True))
+        # README Eq. (1.6): the skin-effect cable model is
+        # H_cable(f) = exp(-(1 + i) * sqrt(f / fc)).  The real part gives the
+        # LMR240 attenuation quoted in the BAR note, while the imaginary part
+        # gives the dispersive delay seen in BAR Fig. 5.
+        phase_factor = 1.0j if include_phase else 0.0
+        response *= np.exp(-(1.0 + phase_factor) * sqrt_loss)
     v_cable = apply_frequency_response(v_button, response)
 
     return {
@@ -830,6 +921,7 @@ def build_signal_base(
         "dt_s": dt,
         "freqs_hz": freqs,
         "line_density_cpm": line_density,
+        "current_profile_a": current_profile_a,
         "button_width_m": width,
         "image_charge_c": image_charge,
         "image_current_a": image_current,
@@ -841,7 +933,11 @@ def build_signal_base(
         "button_impedance_ohm_abs": np.abs(z_button),
         "button_capacitance_f": capacitance_f,
         "characteristic_impedance_ohm": z0,
-        "cable_transfer_abs": response,
+        "cable_transfer_abs": np.abs(response),
+        "image_charge_denominator_m": image_denominator_m,
+        "charge_nC": float(bunch_cfg["charge_nC"]),
+        "sigma_z_m": sigma_z_m,
+        "button_radius_mm": float(cfg["buttons"]["radius_mm"]),
     }
 
 
@@ -890,6 +986,10 @@ def build_analog_sos(dt: float, analog_cfg: dict[str, Any]) -> np.ndarray | None
         cutoff_hz = float(analog_cfg["cutoff_hz"])
         order = int(analog_cfg.get("order", 4))
         return butter(order, cutoff_hz, btype="lowpass", fs=1.0 / dt, output="sos")
+    if analog_type == "lowpass_bessel":
+        cutoff_hz = float(analog_cfg["cutoff_hz"])
+        order = int(analog_cfg.get("order", 4))
+        return bessel(order, cutoff_hz, btype="lowpass", fs=1.0 / dt, norm="phase", output="sos")
     if analog_type == "bandpass_butter":
         center_hz = float(analog_cfg["center_hz"])
         bandwidth_hz = float(analog_cfg["bandwidth_hz"])
@@ -914,10 +1014,39 @@ def apply_analog_filter(v_cable: np.ndarray, dt: float, analog_cfg: dict[str, An
     Returns:
         Filtered voltage waveform.
     """
+    v_filtered, _ = apply_analog_filter_causal(v_cable, dt, analog_cfg)
+    return v_filtered[: len(v_cable)]
+
+
+def filter_tail_time_s(analog_cfg: dict[str, Any]) -> float:
+    """Choose a practical zero-padding tail for causal filter plots."""
+    analog_type = analog_cfg.get("type", "none").lower()
+    if analog_type == "bandpass_butter":
+        return 5.0 / float(analog_cfg["bandwidth_hz"])
+    if analog_type in {"lowpass_butter", "lowpass_bessel"}:
+        return 8.0 / float(analog_cfg["cutoff_hz"])
+    return 0.0
+
+
+def apply_analog_filter_causal(
+    v_cable: np.ndarray,
+    dt: float,
+    analog_cfg: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply one causal analog filter pass and keep enough zero tail to decay.
+
+    The paper's Fig. 8 is a causal time-domain response: the filter output is zero
+    before the bunch-driven signal reaches the electronics, then rings and decays.
+    This function starts the waveform at the first sampled cable point, appends
+    zeros, and applies a one-pass SOS filter.
+    """
     sos = build_analog_sos(dt, analog_cfg)
+    tail_samples = int(math.ceil(filter_tail_time_s(analog_cfg) / dt))
+    padded = np.pad(v_cable, (0, max(0, tail_samples)))
+    t_s = np.arange(len(padded), dtype=float) * dt
     if sos is None:
-        return v_cable
-    return sosfiltfilt(sos, v_cable)
+        return padded, t_s
+    return sosfilt(sos, padded), t_s
 
 
 def analog_transfer_abs(freqs_hz: np.ndarray, dt: float, analog_cfg: dict[str, Any]) -> np.ndarray:
@@ -941,6 +1070,33 @@ def analog_transfer_abs(freqs_hz: np.ndarray, dt: float, analog_cfg: dict[str, A
     return np.abs(h)
 
 
+def analog_transfer_complex(freqs_hz: np.ndarray, dt: float, analog_cfg: dict[str, Any]) -> np.ndarray:
+    """Evaluate the complex one-pass analog transfer function H(f).
+
+    This is used to reproduce the paper-style filtering operation:
+
+        Vf(t) = IFFT(H(f) * FFT(Vc(t)))
+
+    rather than a forward-backward time-domain filter.
+
+    Args:
+        freqs_hz:
+            Frequency samples in Hz.
+        dt:
+            Time step in seconds.
+        analog_cfg:
+            Filter configuration block.
+
+    Returns:
+        Complex transfer-function samples.
+    """
+    sos = build_analog_sos(dt, analog_cfg)
+    if sos is None:
+        return np.ones_like(freqs_hz, dtype=complex)
+    _, h = sosfreqz(sos, worN=freqs_hz, fs=1.0 / dt)
+    return h
+
+
 def signal_chain(boundary: Boundary, cfg: dict[str, Any]) -> dict[str, np.ndarray | float]:
     """Build the full default signal chain including the primary analog filter.
 
@@ -956,15 +1112,15 @@ def signal_chain(boundary: Boundary, cfg: dict[str, Any]) -> dict[str, np.ndarra
     """
     base = build_signal_base(boundary, cfg)
     analog_cfg = cfg["filter"].get("analog", {"type": "none"})
-    v_filtered = apply_analog_filter(np.asarray(base["cable_voltage_v"]), float(base["dt_s"]), analog_cfg)
-    return {**base, "filtered_voltage_v": v_filtered}
+    v_filtered, t_filtered = apply_analog_filter_causal(np.asarray(base["cable_voltage_v"]), float(base["dt_s"]), analog_cfg)
+    return {**base, "filtered_voltage_v": v_filtered, "filtered_t_s": t_filtered}
 
 
 def resolution_curves(kx_mm: float, ky_mm: float, resolution_cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Generate the BPM resolution curves versus relative voltage error.
 
     Physics reference:
-        `README.md` Eq. (1.11).
+        `README.md` Eq. (1.12).
 
     Args:
         kx_mm, ky_mm:
@@ -975,7 +1131,7 @@ def resolution_curves(kx_mm: float, ky_mm: float, resolution_cfg: dict[str, Any]
     Returns:
         Tuple ``(relative_error, sigma_x_mm, sigma_y_mm)``.
     """
-    # README Eq. (1.10): sigma_x ~= Kx * sigma_V / (2V), sigma_y ~= Ky * sigma_V / (2V).
+    # README Eq. (1.12): sigma_x ~= Kx * sigma_V / (2V), sigma_y ~= Ky * sigma_V / (2V).
     rel = np.logspace(
         math.log10(float(resolution_cfg.get("relative_error_min", 1e-4))),
         math.log10(float(resolution_cfg.get("relative_error_max", 1e-2))),
@@ -1081,33 +1237,162 @@ def plot_resolution(output_path: Path, rel: np.ndarray, sigma_x: np.ndarray, sig
     plt.close(fig)
 
 
-def plot_signal_summary(output_path: Path, signal_data: dict[str, np.ndarray | float]) -> None:
-    """Generate a compact two-panel summary of the longitudinal signal chain."""
+def plot_signal_summary(
+    output_path: Path,
+    signal_data: dict[str, np.ndarray | float],
+    comparison_filters: list[dict[str, Any]],
+) -> None:
+    """Generate a compact three-panel summary of the longitudinal signal chain.
+
+    The first panel shows the bunch current profile and button width. The second
+    panel keeps the short image-current/button-voltage time scale. The third
+    panel is dedicated to filtered voltage so the LPF/BPF amplitudes are readable
+    even when they are much smaller than the raw button voltage.
+    """
     z_mm = np.asarray(signal_data["z_m"]) * 1e3
-    t_ns = np.asarray(signal_data["t_s"]) * 1e9
+    t_s = np.asarray(signal_data["t_s"])
+    t_ns = (t_s - t_s[0]) * 1e9
+    dt = float(signal_data["dt_s"])
+    current_profile_a = np.asarray(signal_data["current_profile_a"])
     image_current_ma = 1e3 * np.asarray(signal_data["image_current_a"])
     v_button = np.asarray(signal_data["button_voltage_v"])
-    v_filtered = np.asarray(signal_data["filtered_voltage_v"])
+    v_cable = np.asarray(signal_data["cable_voltage_v"])
+    button_width_mm = 1e3 * np.asarray(signal_data["button_width_m"])
+    charge_nC = float(signal_data["charge_nC"])
+    sigma_mm = 1e3 * float(signal_data["sigma_z_m"])
+    button_radius_mm = float(signal_data["button_radius_mm"])
 
-    fig, axes = plt.subplots(2, 1, figsize=(8.0, 6.0), sharex=False)
-    axes[0].plot(z_mm, 1e9 * np.asarray(signal_data["line_density_cpm"]) * 1e-3, label="line density (scaled)")
-    axes[0].plot(z_mm, 1e3 * np.asarray(signal_data["button_width_m"]), label="button width (mm)")
-    axes[0].set_xlabel("z (mm)")
-    axes[0].set_ylabel("arb.")
-    axes[0].grid(True, alpha=0.3)
-    axes[0].legend(loc="upper right")
+    z_half_span_mm = max(2.0 * button_radius_mm, 5.0 * sigma_mm)
+    t_half_span_ns = 1e9 * (z_half_span_mm * 1e-3) / constants.c
 
-    axes[1].plot(t_ns, image_current_ma, color="tab:green", label="image current (mA)")
-    axes[1].plot(t_ns, v_button, color="tab:orange", label="button voltage (V)")
-    axes[1].plot(t_ns, v_filtered, color="tab:red", label="filtered voltage (V)")
-    axes[1].set_xlabel("t (ns)")
-    axes[1].set_ylabel("signal")
-    axes[1].grid(True, alpha=0.3)
-    axes[1].legend(loc="upper right")
+    fig, axes = plt.subplots(3, 1, figsize=(8.4, 8.2), sharex=False)
+    fig.suptitle(f"Charge = {charge_nC:.3g} nC, Beam sigma = {sigma_mm:.3g} mm")
 
-    fig.tight_layout()
+    ax_top = axes[0]
+    ax_top_r = ax_top.twinx()
+    ax_top.plot(z_mm, current_profile_a, color="tab:blue", linewidth=1.8, label="current profile [A]")
+    ax_top_r.plot(z_mm, button_width_mm, color="tab:orange", linewidth=1.8, label="button width (mm)")
+    ax_top.set_xlim(-z_half_span_mm, z_half_span_mm)
+    ax_top.set_xlabel("z (mm)")
+    ax_top.set_ylabel("Current (A)")
+    ax_top_r.set_ylabel("Button width (mm)")
+    ax_top.grid(True, alpha=0.3)
+    top_lines = ax_top.get_lines() + ax_top_r.get_lines()
+    ax_top.legend(top_lines, [line.get_label() for line in top_lines], loc="upper right")
+
+    ax_bot = axes[1]
+    ax_bot_r = ax_bot.twinx()
+    ax_bot.plot(t_ns, image_current_ma, color="tab:green", linewidth=1.8, label="image current (mA)")
+    ax_bot_r.plot(t_ns, v_button, color="tab:orange", linewidth=1.8, label="button voltage (V)")
+    raw_min_end_ns = max(0.05, 1e9 * (2.0 * button_radius_mm * 1e-3) / constants.c)
+    raw_plot_end_ns = max(
+        post_peak_decay_time_ns(t_ns, image_current_ma, remaining_fraction=0.01, min_end_ns=raw_min_end_ns),
+        post_peak_decay_time_ns(t_ns, v_button, remaining_fraction=0.01, min_end_ns=raw_min_end_ns),
+    )
+    ax_bot.set_xlim(0.0, raw_plot_end_ns)
+    ax_bot.margins(x=0.0)
+    ax_bot.set_xlabel("t (ns)")
+    ax_bot.set_ylabel("Image current (mA)")
+    ax_bot_r.set_ylabel("Voltage (V)")
+    ax_bot.grid(True, alpha=0.3)
+    bot_lines = ax_bot.get_lines() + ax_bot_r.get_lines()
+    ax_bot.legend(bot_lines, [line.get_label() for line in bot_lines], loc="upper right")
+
+    ax_filter = axes[2]
+    filter_plot_end_ns = 0.0
+    if not comparison_filters:
+        ax_filter.plot(
+            np.asarray(signal_data["filtered_t_s"]) * 1e9,
+            np.asarray(signal_data["filtered_voltage_v"]),
+            linewidth=1.8,
+            label="filtered voltage",
+        )
+        filter_plot_end_ns = post_peak_decay_time_ns(
+            np.asarray(signal_data["filtered_t_s"]) * 1e9,
+            np.asarray(signal_data["filtered_voltage_v"]),
+            remaining_fraction=0.05,
+            min_end_ns=2.0 * t_half_span_ns,
+        )
+    else:
+        for filt in comparison_filters:
+            vf, tf_s = apply_analog_filter_causal(v_cable, dt, filt)
+            tf_ns = tf_s * 1e9
+            filter_plot_end_ns = max(
+                filter_plot_end_ns,
+                post_peak_decay_time_ns(tf_ns, vf, remaining_fraction=0.05, min_end_ns=5.0),
+            )
+            ax_filter.plot(tf_ns, vf, linewidth=1.8, label=str(filt.get("name", filt.get("type", "filter"))))
+    ax_filter.set_xlim(0.0, filter_plot_end_ns)
+    ax_filter.margins(x=0.0)
+    ax_filter.set_xlabel("t (ns)")
+    ax_filter.set_ylabel("Filtered voltage (V)")
+    ax_filter.grid(True, alpha=0.3)
+    ax_filter.legend(loc="upper right")
+
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
+
+
+def single_sided_spectrum_mV(signal: np.ndarray, n_fft: int) -> np.ndarray:
+    """Return a single-sided FFT amplitude spectrum in mV."""
+    spectrum = np.abs(np.fft.rfft(signal, n=n_fft)) / n_fft
+    if len(spectrum) > 2:
+        spectrum[1:-1] *= 2.0
+    return 1e3 * spectrum
+
+
+def quiet_time_ns(t_ns: np.ndarray, signal: np.ndarray, rel_threshold: float = 0.01, min_end_ns: float = 0.0) -> float:
+    """Choose a plotting endpoint after a signal has decayed near zero."""
+    abs_signal = np.abs(signal)
+    peak = float(abs_signal.max()) if len(abs_signal) else 0.0
+    if peak <= 0.0:
+        return float(max(t_ns[-1], min_end_ns))
+    active = np.flatnonzero(abs_signal > rel_threshold * peak)
+    if len(active) == 0:
+        return float(max(t_ns[-1], min_end_ns))
+    idx = min(len(t_ns) - 1, active[-1] + max(5, len(t_ns) // 100))
+    return float(max(t_ns[idx], min_end_ns))
+
+
+def post_peak_decay_time_ns(
+    t_ns: np.ndarray,
+    signal: np.ndarray,
+    remaining_fraction: float = 0.05,
+    min_end_ns: float = 5.0,
+) -> float:
+    """Return a plot endpoint after the waveform decays from its peak.
+
+    Args:
+        t_ns:
+            Monotonic time array in ns, normally starting at zero for Fig. 8.
+        signal:
+            Voltage waveform.
+        remaining_fraction:
+            Fraction of the peak magnitude that defines "nearly damped away".
+            The default 0.05 means the signal has dropped by 95%.
+        min_end_ns:
+            Minimum endpoint in ns.
+
+    Returns:
+        Time in ns after the last post-peak sample above the threshold, with a
+        small visual pad. The value is clamped to the available sampled tail.
+    """
+    if len(t_ns) == 0:
+        return min_end_ns
+    abs_signal = np.abs(signal)
+    peak = float(abs_signal.max()) if len(abs_signal) else 0.0
+    if peak <= 0.0:
+        return float(max(t_ns[-1], min_end_ns))
+    peak_idx = int(np.argmax(abs_signal))
+    threshold = remaining_fraction * peak
+    post_peak_active = np.flatnonzero(abs_signal[peak_idx:] >= threshold)
+    if len(post_peak_active) == 0:
+        end_idx = peak_idx
+    else:
+        end_idx = peak_idx + int(post_peak_active[-1])
+    pad_ns = max(2.0, 0.05 * max(float(t_ns[end_idx]), min_end_ns))
+    return float(min(max(t_ns[-1], min_end_ns), max(float(t_ns[end_idx]) + pad_ns, min_end_ns)))
 
 
 def plot_fig3_impedance_current_spectrum(output_path: Path, signal_data: dict[str, np.ndarray | float]) -> None:
@@ -1186,27 +1471,36 @@ def plot_fig7_frequency_filters(
     """
     if not comparison_filters:
         return
-    f_ghz = np.asarray(signal_data["freqs_hz"]) * 1e-9
     dt = float(signal_data["dt_s"])
-    v_b_fft = np.asarray(signal_data["button_voltage_fft_abs"])
-    v_c_fft = np.asarray(signal_data["cable_voltage_fft_abs"])
+    v_b = np.asarray(signal_data["button_voltage_v"])
     v_cable = np.asarray(signal_data["cable_voltage_v"])
+    # README Section 1.3 and BAR Fig. 7: use a plotting FFT grid fine enough
+    # to resolve the narrow BPF bandwidth before evaluating H(f) * FFT(Vc).
+    n_fft = spectrum_fft_size_for_filters(len(v_cable), dt, comparison_filters)
+    freqs_hz = np.fft.rfftfreq(n_fft, d=dt)
+    f_ghz = freqs_hz * 1e-9
+    v_b_fft = single_sided_spectrum_mV(v_b, n_fft)
+    v_c_fft = single_sided_spectrum_mV(v_cable, n_fft)
 
     ncols = len(comparison_filters)
     fig, axes = plt.subplots(1, ncols, figsize=(6.6 * ncols, 4.8), squeeze=False)
     for ax, filt in zip(axes[0], comparison_filters):
-        vf = apply_analog_filter(v_cable, dt, filt)
-        vf_fft = np.abs(np.fft.rfft(vf, n=2 * (len(f_ghz) - 1)))
-        h_abs = analog_transfer_abs(np.asarray(signal_data["freqs_hz"]), dt, filt)
+        h = analog_transfer_complex(freqs_hz, dt, filt)
+        vf_fft = 1e3 * np.abs(np.fft.rfft(v_cable, n=n_fft) * h) / n_fft
+        if len(vf_fft) > 2:
+            vf_fft[1:-1] *= 2.0
+        h_abs = analog_transfer_abs(freqs_hz, dt, filt)
         ax2 = ax.twinx()
         ax.loglog(f_ghz[1:], v_b_fft[1:], color="tab:blue", linewidth=1.6, label="Vb")
         ax.loglog(f_ghz[1:], v_c_fft[1:], color="tab:orange", linewidth=1.6, label="Vc")
         ax.loglog(f_ghz[1:], vf_fft[1:], color="tab:red", linewidth=1.6, label=str(filt.get("name", "Vf")))
         ax2.semilogx(f_ghz[1:], h_abs[1:], color="tab:green", linewidth=1.6, label="|H|")
         ax.set_xlabel("f (GHz)")
-        ax.set_ylabel("V (arb.)")
+        ax.set_ylabel("V (mV)")
         ax2.set_ylabel("|H|")
         ax.set_xlim(1e-2, 1e1)
+        ax.set_ylim(bottom=1e-4)
+        ax2.set_ylim(0.0, max(1.05, 1.05 * float(np.nanmax(h_abs))))
         ax.set_title(str(filt.get("name", filt.get("type", "filter"))))
         ax.grid(True, which="both", alpha=0.3)
         lines = ax.get_lines() + ax2.get_lines()
@@ -1224,14 +1518,21 @@ def plot_fig8_filter_outputs(
     """Plot BAR-like Fig. 8: time-domain outputs of comparison filters."""
     if not comparison_filters:
         return
-    t_ns = np.asarray(signal_data["t_s"]) * 1e9
     dt = float(signal_data["dt_s"])
     v_cable = np.asarray(signal_data["cable_voltage_v"])
 
     fig, ax = plt.subplots(figsize=(6.8, 4.8))
+    x_end_ns = 0.0
     for filt in comparison_filters:
-        vf = apply_analog_filter(v_cable, dt, filt)
+        vf, t_s = apply_analog_filter_causal(v_cable, dt, filt)
+        t_ns = t_s * 1e9
+        x_end_ns = max(
+            x_end_ns,
+            post_peak_decay_time_ns(t_ns, vf, remaining_fraction=0.05, min_end_ns=5.0),
+        )
         ax.plot(t_ns, vf, linewidth=1.8, label=str(filt.get("name", filt.get("type", "filter"))))
+    ax.set_xlim(0.0, x_end_ns)
+    ax.margins(x=0.0)
     ax.set_xlabel("t (ns)")
     ax.set_ylabel("Vf (V)")
     ax.grid(True, alpha=0.3)
@@ -1340,6 +1641,7 @@ def write_report(
     v_rms = float(np.sqrt(np.mean(v_filtered**2)))
     cap_pf = float(signal_data["button_capacitance_f"]) * 1e12
     z0 = float(signal_data["characteristic_impedance_ohm"])
+    image_denominator_mm = float(signal_data["image_charge_denominator_m"]) * 1e3
 
     sigma_x_ref_mm = 0.5 * kx_mm * reference_rel_error
     sigma_y_ref_mm = 0.5 * ky_mm * reference_rel_error
@@ -1359,6 +1661,7 @@ def write_report(
         f"- Config: `{cfg_path}`",
         f"- Chamber type: `{cfg['chamber']['kind']}`",
         f"- Boundary perimeter: {boundary.perimeter:.3f} mm",
+        f"- Longitudinal image-charge denominator: {image_denominator_mm:.3f} mm",
         f"- Button capacitance used in signal model: {cap_pf:.3f} pF",
         f"- Characteristic impedance: {z0:.1f} ohm",
         "",
@@ -1464,7 +1767,7 @@ def run(cfg_path: Path) -> dict[str, Path]:
     plot_linearity(linearity_path, boundary, masks, colors, beam_xy_mm, measured_xy_mm)
     plot_polyfit(polyfit_path, boundary, masks, colors, beam_xy_mm, fit_xy_mm)
     plot_resolution(resolution_path, rel, sigma_x, sigma_y)
-    plot_signal_summary(signal_path, signal_data)
+    plot_signal_summary(signal_path, signal_data, comparison_filters)
     plot_fig3_impedance_current_spectrum(fig3_path, signal_data)
     plot_fig4_current_voltage(fig4_path, signal_data)
     plot_fig5_cable_io(fig5_path, signal_data)

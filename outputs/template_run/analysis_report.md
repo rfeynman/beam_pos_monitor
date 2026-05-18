@@ -3,6 +3,7 @@
 - Config: `/Users/wange/Coding/Python/bpm/input_template.yaml`
 - Chamber type: `round`
 - Boundary perimeter: 314.154 mm
+- Longitudinal image-charge denominator: 314.154 mm
 - Button capacitance used in signal model: 3.400 pF
 - Characteristic impedance: 50.0 ohm
 
@@ -17,10 +18,10 @@
 
 ## Signal Summary
 
-- Peak voltage at button output: 6.581e-03 V
-- Peak voltage after cable model: 5.292e-04 V
-- Peak voltage after analog filter: 4.926e-04 V
-- RMS voltage after analog filter: 4.926e-04 V
+- Peak voltage at button output: 6.581e+00 V
+- Peak voltage after cable model: 4.047e-01 V
+- Peak voltage after analog filter: 6.493e-03 V
+- RMS voltage after analog filter: 1.371e-03 V
 
 ## Resolution
 

@@ -56,7 +56,9 @@ Call this **Eq. (1.2)**.
 where:
 
 - `c` is the speed of light
-- `P` is the chamber perimeter used here as the geometric normalization for the image charge pickup fraction
+- `P` is the geometric normalization for the image charge pickup fraction
+
+For the BAR/SLAC button formula, `P = 2*pi*b`, where `b` is the chamber radius or the transverse chamber dimension used by the model. In `bar_bpm_octagon.yaml`, the BAR table gives a 20 mm half-height, so the paper-matching value is `2*pi*20 mm = 125.663706 mm`. If `signal_model.image_charge_denominator_mm` is not supplied, the code falls back to the chamber perimeter as a generic non-round approximation.
 
 The code path is:
 
@@ -107,21 +109,32 @@ This is implemented in `signal_chain(...)`.
 
 ### 1.3 Cable and analog filter model
 
-The BAR note uses a cable attenuation model of the form:
+The BAR note uses a skin-effect cable model. In magnitude-only form, the attenuation is:
 
 ```text
-H_cable(f) = exp(-sqrt(f / f_c))
+|H_cable(f)| = exp(-sqrt(f / f_c))
 ```
 
-The code applies this directly in frequency space.
+For time-domain signals such as BAR Fig. 5, the code uses the complex form:
 
-After that, the analog front-end is modeled with simple Butterworth filters:
+```text
+H_cable(f) = exp(-(1 + i) sqrt(f / f_c))
+```
+
+Call this **Eq. (1.6)**.
+
+The real exponential gives the quoted cable attenuation. The phase term is important because it gives the dispersive delay of the cable output relative to the button input. Without that phase term, the inverse FFT behaves like a zero-phase smoothing operation and the cable output is not delayed correctly.
+
+After that, the analog front-end is modeled with standard filter transfer functions:
 
 - `none`
 - `lowpass_butter`
+- `lowpass_bessel`
 - `bandpass_butter`
 
 This is not an exact circuit-level reproduction of a measured prototype board. It is a practical system model that lets you sweep cutoff, center frequency, and bandwidth from YAML.
+
+For Fig. 7-style frequency plots, the code evaluates the spectra on a zero-padded FFT grid fine enough to resolve the narrowest comparison-filter feature. This matters for the 500 MHz, 20 MHz-bandwidth BPF: if the frequency-bin spacing is too coarse, the plotted transfer function can miss the passband peak and falsely show a much smaller `|H_BPF|`.
 
 ### 1.4 2D boundary-element method for BPM position
 
@@ -138,7 +151,7 @@ The Green function in 2D is:
 G(r, r') = (1 / 2 pi epsilon0) ln(1 / |r - r'|)
 ```
 
-Call this **Eq. (1.6)**.
+Call this **Eq. (1.7)**.
 
 The chamber boundary is discretized into many short line segments. On each segment, the surface charge density is assumed constant. This gives the matrix system:
 
@@ -152,7 +165,7 @@ Because the conductor boundary is at zero potential:
 [sigma_j] = -rho0 [G_ij]^-1 [G_i0]
 ```
 
-Call the inversion relation **Eq. (1.7)**.
+Call the inversion relation **Eq. (1.8)**.
 
 The code does exactly this:
 
@@ -178,7 +191,7 @@ Dx = (V_B + V_C - V_A - V_D) / (V_A + V_B + V_C + V_D)
 Dy = (V_A + V_B - V_C - V_D) / (V_A + V_B + V_C + V_D)
 ```
 
-This is the four-corner layout used for `buttons.layout: corners`. Call it **Eq. (1.8a)**.
+This is the four-corner layout used for `buttons.layout: corners`. Call it **Eq. (1.9a)**.
 
 For a round BPM with four buttons on the cardinal axes, the code also supports:
 
@@ -187,7 +200,7 @@ Dx = (V_R - V_L) / (V_T + V_R + V_B + V_L)
 Dy = (V_T - V_B) / (V_T + V_R + V_B + V_L)
 ```
 
-This is the four-cardinal layout used for `buttons.layout: cardinal`. Call it **Eq. (1.8b)**.
+This is the four-cardinal layout used for `buttons.layout: cardinal`. Call it **Eq. (1.9b)**.
 
 Here the code uses induced charge from the electrostatic solve in place of voltage because the relative button sharing determines the position.
 
@@ -198,7 +211,7 @@ X = Kx * Dx
 Y = Ky * Dy
 ```
 
-Call this **Eq. (1.9)**.
+Call this **Eq. (1.10)**.
 
 The code determines `Kx` and `Ky` from a linear fit around the origin:
 
@@ -227,7 +240,7 @@ x(X,Y) = sum Cx_ij X^i Y^j
 y(X,Y) = sum Cy_ij X^i Y^j
 ```
 
-Call this **Eq. (1.10)**.
+Call this **Eq. (1.11)**.
 
 with order set by YAML, typically `5`.
 
@@ -245,7 +258,7 @@ sigma_x ~= Kx * sigma_V / (2 V)
 sigma_y ~= Ky * sigma_V / (2 V)
 ```
 
-Call this **Eq. (1.11)**.
+Call this **Eq. (1.12)**.
 
 The code plots `sigma_x` and `sigma_y` versus relative voltage error `sigma_V / V`.
 
@@ -261,7 +274,7 @@ Given a YAML file, the solver produces:
 1. a BPM linearity plot similar to BAR Fig. 11
 2. a polynomial-corrected plot similar to BAR Fig. 12
 3. a BPM resolution plot similar to BAR Fig. 13
-4. a signal summary plot for the longitudinal signal chain
+4. a three-panel signal summary plot: bunch current/button width, raw image current/button voltage, and LPF/BPF filtered voltage
 5. a Markdown analysis report with key numbers
 
 ### 1.9 Important modeling assumptions
@@ -692,6 +705,7 @@ filter:
   cable:
     enabled: true
     attenuation_fc_hz: 4.65e8
+    skin_effect_phase: true
   analog:
     type: lowpass_butter
     order: 4
@@ -702,6 +716,15 @@ filter:
     num_points: 200
     reference_relative_error: 1.6e-3
 ```
+
+Optional BAR-style signal normalization:
+
+```yaml
+signal_model:
+  image_charge_denominator_mm: 125.6637061436
+```
+
+This value is the denominator `P` in Eq. (1.2). Use `2*pi*b` to match the BAR/SLAC longitudinal button formula, or omit the block to use the chamber perimeter fallback.
 
 ### `characteristic_impedance_ohm`
 
@@ -718,10 +741,22 @@ Turn cable attenuation on or off.
 Parameter `f_c` in:
 
 ```text
-H_cable(f) = exp(-sqrt(f / f_c))
+|H_cable(f)| = exp(-sqrt(f / f_c))
 ```
 
 This controls how fast high frequency content is attenuated.
+
+For the BAR note's 50 m LMR240 cable, the quoted loss is 18 dB/100 m at 500 MHz. For 50 m that is 9 dB at 500 MHz, which gives `attenuation_fc_hz` close to `4.65e8`.
+
+#### `skin_effect_phase`
+
+When `true`, the code uses the full complex skin-effect response:
+
+```text
+H_cable(f) = exp(-(1 + i) sqrt(f / f_c))
+```
+
+Keep this `true` to reproduce BAR Fig. 5, where the cable output signal arrives later than the input signal.
 
 ### `analog`
 
@@ -729,6 +764,7 @@ Allowed filter types:
 
 - `none`
 - `lowpass_butter`
+- `lowpass_bessel`
 - `bandpass_butter`
 
 #### Low-pass example
@@ -738,6 +774,15 @@ analog:
   type: lowpass_butter
   order: 4
   cutoff_hz: 1.3e8
+```
+
+Use `lowpass_bessel` when approximating the low-pass Bessel-style EIC/RHIC prototype filter discussed in the BAR note:
+
+```yaml
+analog:
+  type: lowpass_bessel
+  order: 4
+  cutoff_hz: 7.0e7
 ```
 
 #### Band-pass example
