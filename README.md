@@ -277,6 +277,8 @@ Given a YAML file, the solver produces:
 4. a three-panel signal summary plot: bunch current/button width, raw image current/button voltage, and LPF/BPF filtered voltage
 5. a Markdown analysis report with key numbers
 
+By default, frequency-domain plots do not use a fixed GHz range. Fig. 3 and Fig. 7 choose their x-axis from the plotted impedance, spectra, and filter-transfer curves, extending until the curves have dropped close to their numerical noise floor. This is important for short-bunch inputs such as `linac_bpm.yaml`, where useful spectral content can extend far beyond 10 GHz. You can override this with `filter.frequency_range` in the YAML.
+
 ### 1.9 Important modeling assumptions
 
 - The transverse BPM solve is 2D electrostatic, not full 3D EM.
@@ -702,6 +704,8 @@ Example:
 ```yaml
 filter:
   characteristic_impedance_ohm: 50.0
+  frequency_range: auto
+  figure5_time_range: auto
   cable:
     enabled: true
     attenuation_fc_hz: 4.65e8
@@ -730,6 +734,66 @@ This value is the denominator `P` in Eq. (1.2). Use `2*pi*b` to match the BAR/SL
 
 Cable / electronics reference impedance, normally `50`.
 
+### `frequency_range`
+
+Controls the Fig. 3 and Fig. 7 x-axis frequency range in GHz.
+
+Use automatic code-calculated limits:
+
+```yaml
+frequency_range: auto
+```
+
+Use the same manual range for both Fig. 3 and Fig. 7:
+
+```yaml
+frequency_range:
+  min_ghz: 0.01
+  max_ghz: 10.0
+```
+
+Use separate ranges for Fig. 3 and Fig. 7:
+
+```yaml
+frequency_range:
+  figure3: auto
+  figure7:
+    min_ghz: 0.01
+    max_ghz: 10.0
+```
+
+List form is also accepted:
+
+```yaml
+frequency_range: [0.01, 10.0]
+```
+
+### `figure5_time_range`
+
+Controls the Fig. 5 time-axis range in ns.
+
+Use automatic limits:
+
+```yaml
+figure5_time_range: auto
+```
+
+In automatic mode, the x-axis starts at `0 ns` and ends after both the input and cable-output signals have dropped to `5%` of their peak values. This is a 95% reduction from peak amplitude.
+
+Use a manual time range:
+
+```yaml
+figure5_time_range:
+  min_ns: 0.0
+  max_ns: 2.0
+```
+
+List form is also accepted:
+
+```yaml
+figure5_time_range: [0.0, 2.0]
+```
+
 ### `cable`
 
 #### `enabled`
@@ -738,15 +802,34 @@ Turn cable attenuation on or off.
 
 #### `attenuation_fc_hz`
 
-Parameter `f_c` in:
+Optional direct parameter `f_c` in:
 
 ```text
 |H_cable(f)| = exp(-sqrt(f / f_c))
 ```
 
-This controls how fast high frequency content is attenuated.
+This controls how fast high frequency content is attenuated. You do not need to provide this value if the cable length and reference attenuation data are supplied.
 
-For the BAR note's 50 m LMR240 cable, the quoted loss is 18 dB/100 m at 500 MHz. For 50 m that is 9 dB at 500 MHz, which gives `attenuation_fc_hz` close to `4.65e8`.
+Preferred physical cable inputs:
+
+```yaml
+cable:
+  enabled: true
+  length_m: 50.0
+  match_frequency_hz: 5.0e8
+  attenuation_db_per_100m: 18.0
+  skin_effect_phase: true
+```
+
+The code derives `f_c` from these values:
+
+```text
+total_loss_dB = attenuation_db_per_100m * length_m / 100
+sqrt(match_frequency_hz / f_c) = ln(10) * total_loss_dB / 20
+f_c = match_frequency_hz / (ln(10) * total_loss_dB / 20)^2
+```
+
+For the BAR note's 50 m LMR240 cable, the quoted loss is 18 dB/100 m at 500 MHz. For 50 m that is 9 dB at 500 MHz, which gives `f_c = 4.66e8 Hz`, essentially the same as the previous manual `attenuation_fc_hz: 4.65e8`.
 
 #### `skin_effect_phase`
 

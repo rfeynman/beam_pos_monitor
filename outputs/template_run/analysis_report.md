@@ -1,11 +1,12 @@
 # BAR BPM Analysis Report
 
-- Config: `/Users/wange/Coding/Python/bpm/input_template.yaml`
+- Config: `/Users/wange/Coding/Python/bpm/linac_bpm.yaml`
 - Chamber type: `round`
 - Boundary perimeter: 314.154 mm
 - Longitudinal image-charge denominator: 314.154 mm
 - Button capacitance used in signal model: 3.400 pF
 - Characteristic impedance: 50.0 ohm
+- Effective cable attenuation frequency `fc`: 4.657e+08 Hz
 
 ## Linearity
 
@@ -19,8 +20,8 @@
 ## Signal Summary
 
 - Peak voltage at button output: 6.581e+00 V
-- Peak voltage after cable model: 4.047e-01 V
-- Peak voltage after analog filter: 6.493e-03 V
+- Peak voltage after cable model: 4.045e-01 V
+- Peak voltage after analog filter: 6.490e-03 V
 - RMS voltage after analog filter: 1.371e-03 V
 
 ## Resolution

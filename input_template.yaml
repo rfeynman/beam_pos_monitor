@@ -1,45 +1,45 @@
+# Template configuration for the BPM analysis code.
+# Every input below includes an inline explanation so this file can be used
+# both as a runnable example and as a reference when creating a new case.
+
 bunch:
   longitudinal_grid:
-    grid_number: 200
-    no_cut_span_sigma: 8.0
+    grid_number: 200  # Number of longitudinal samples across one sigma of the bunch profile. The actual step size is dz = sigma_mm / grid_number for each signal case.
+    no_cut_span_sigma: 8.0  # If a Gaussian case uses cutoff_sigma: 0.0, the code still needs a finite computational window. It then uses +/- no_cut_span_sigma * sigma_mm as the z-range.
 
 chamber:
-  # Use one of: round, ellipse, polygon
-  kind: round
+  kind: round  # Vacuum chamber cross-section type. Allowed values: round, ellipse, polygon.
 
-  # Round option:
-  radius_mm: 50.0
+  radius_mm: 50.0  # Used only when kind: round. This is the inner wall radius of the circular chamber in mm.
 
-  # Ellipse option:
-  # a_mm: 40.0
-  # b_mm: 20.0
+  # a_mm: 40.0  # Used only when kind: ellipse. Semi-axis along x in mm. The full horizontal width is 2*a_mm.
+  # b_mm: 20.0  # Used only when kind: ellipse. Semi-axis along y in mm. The full vertical height is 2*b_mm.
 
-  # Polygon option:
-  #points_mm:
-  #  - [-10.0, 20.0]
-  #  - [10.0, 20.0]
-  #  - [40.0, 8.0]
-  #  - [40.0, -8.0]
-  #  - [10.0, -20.0]
-  #  - [-10.0, -20.0]
-  #  - [-40.0, -8.0]
-  #  - [-40.0, 8.0]
+  # points_mm:  # Used only when kind: polygon. List the chamber boundary vertices in mm, ordered around the wall clockwise or counter-clockwise.
+  #   - [-10.0, 20.0]  # Each point is [x_mm, y_mm]. The last point does not need to repeat the first one.
+  #   - [10.0, 20.0]
+  #   - [40.0, 8.0]
+  #   - [40.0, -8.0]
+  #   - [10.0, -20.0]
+  #   - [-10.0, -20.0]
+  #   - [-40.0, -8.0]
+  #   - [-40.0, 8.0]
 
-  boundary_elements: 320
-  quadrature_order: 8
+  boundary_elements: 320  # Number of boundary elements used by the 2D electrostatic solver. Larger values give better geometric accuracy but increase runtime.
+  quadrature_order: 8  # Numerical integration order used on each boundary element when solving for induced charge and button weighting.
 
 buttons:
-  # `corners` means four pickups on the diagonals using labels A/B/C/D.
-  # `cardinal` means top/right/bottom/left using labels T/R/B/L.
-  layout: corners
-  radius_mm: 4.0
-  thickness_mm: 2.0
-  gap_mm: 0.3
-  capacitance_pf: 3.4
+  # `corners` means four pickups placed on the diagonals and labeled A/B/C/D.
+  # `cardinal` means top/right/bottom/left and labeled T/R/B/L.
+  layout: corners  # Plotting and report label convention for the pickups. It does not move the pickups by itself; the actual coordinates are defined in pickups below.
+  radius_mm: 4.0  # Button electrode radius in mm. The code treats each pickup as a circular button in the 2D cross-section.
+  thickness_mm: 2.0  # Effective button width along the beam direction in mm. This sets the image-current pulse width produced when the bunch passes the button.
+  gap_mm: 0.3  # Mechanical insulating gap between the button and chamber wall in mm. Present for documentation and future geometry refinement; the present signal model mainly uses capacitance_pf for the electrical response.
+  capacitance_pf: 3.4  # Button capacitance in pF. This enters the button impedance and voltage calculation.
   pickups:
-    - label: A
-      center_mm: [-35, 35]
-      color: tab:orange
+    - label: A  # Button name used in plots, legends, and output tables.
+      center_mm: [-35, 35]  # Button center location [x_mm, y_mm] in the chamber cross-section.
+      color: tab:orange  # Matplotlib color used to draw this pickup in geometry and signal figures.
     - label: B
       center_mm: [35, 35]
       color: tab:green
@@ -51,44 +51,68 @@ buttons:
       color: tab:purple
 
 filter:
-  characteristic_impedance_ohm: 50.0
+  characteristic_impedance_ohm: 50.0  # Reference impedance of the button-cable-filter chain in ohms. Most BPM electronics and coaxial cables use 50 ohm matching.
+
+  # Frequency axis control for Fig. 3 and Fig. 7.
+  # Use `auto` to let the code extend the frequency axis until the impedance or spectrum drops near the numerical floor.
+  # You may also set:
+  # frequency_range: {min_ghz: 0.01, max_ghz: 10.0}
+  # or per-figure overrides:
+  # frequency_range:
+  #   figure3: auto
+  #   figure7: {min_ghz: 0.01, max_ghz: 10.0}
+  frequency_range: auto  # Automatic frequency-range selection is recommended unless you need a fixed plotting range for comparison between cases.
+
+  # Time axis control for Fig. 5.
+  # Use `auto` to let the code stop the plot when both cable-input and cable-output voltages have dropped by about 95% from their peak values.
+  # You may also set:
+  # figure5_time_range: {min_ns: 0.0, max_ns: 2.0}
+  figure5_time_range: auto  # Auto is usually best because short bunches and long bunches can require very different visible time spans.
+
   cable:
-    enabled: true
-    attenuation_fc_hz: 4.65e8
-    skin_effect_phase: true
+    enabled: true  # If true, apply the cable attenuation and phase-delay model between the button output and the electronics input.
+    length_m: 50.0  # Physical cable length in meters between the button feedthrough and the filter/electronics input.
+    match_frequency_hz: 5.0e8  # Frequency at which the manufacturer attenuation value is specified. Example: 5.0e8 means 500 MHz.
+    attenuation_db_per_100m: 18.0  # Cable attenuation magnitude in dB per 100 m at match_frequency_hz. The code uses this together with length_m to derive the exponential attenuation frequency fc.
+    skin_effect_phase: true  # If true, include the skin-effect phase term so the cable output pulse is delayed relative to the input pulse, consistent with the paper Fig. 5 behavior.
+
   analog:
-    type: lowpass_butter
-    order: 4
-    cutoff_hz: 1.3e8
+    type: lowpass_butter  # Main filter used to create the default filtered waveform in reports and summary plots. Supported types depend on bpm_analysis.py, commonly lowpass_butter, lowpass_bessel, and bandpass_butter.
+    order: 4  # Analog filter order. Larger order gives a sharper roll-off but stronger shaping in time domain.
+    cutoff_hz: 1.3e8  # For low-pass filters, this is the cutoff frequency in Hz. Example: 1.3e8 = 130 MHz.
+
   comparison_filters:
-    - name: LPF 130MHz
-      type: lowpass_butter
+    - name: LPF 130MHz  # Display name used in Fig. 7, Fig. 8, and summary plots.
+      type: lowpass_butter  # First comparison filter definition.
       order: 4
       cutoff_hz: 1.3e8
     - name: BPF 500MHz
-      type: bandpass_butter
+      type: bandpass_butter  # Band-pass example centered around the button resonance region.
       order: 2
-      center_hz: 5.0e8
-      bandwidth_hz: 2.0e7
+      center_hz: 5.0e8  # Band-pass center frequency in Hz.
+      bandwidth_hz: 2.0e7  # Band-pass full bandwidth in Hz.
+
   resolution:
-    relative_error_min: 1.0e-4
-    relative_error_max: 1.0e-2
-    num_points: 200
-    reference_relative_error: 1.6e-3
+    relative_error_min: 1.0e-4  # Lower bound of the assumed relative voltage error used when computing BPM position resolution in Fig. 13.
+    relative_error_max: 1.0e-2  # Upper bound of the assumed relative voltage error used for the same resolution scan.
+    num_points: 200  # Number of error samples between relative_error_min and relative_error_max.
+    reference_relative_error: 1.6e-3  # Reference error level highlighted in the report as a practical working point for the resolution estimate.
 
 signal_cases:
-  - name: 1nC, 1mm
-    charge_nC: 1.0
+  - name: 1nC, 1mm  # Case label written into output filenames, figure titles, and report sections.
+    charge_nC: 1.0  # Total bunch charge in nC for this signal case.
     density:
-      kind: gaussian
-      sigma_mm: 1.0
-      cutoff_sigma: 0.0
+      kind: gaussian  # Longitudinal density model. Allowed values are gaussian or arbitrary.
+      sigma_mm: 1.0  # RMS bunch length sigma in mm for the Gaussian case.
+      cutoff_sigma: 0.0  # Longitudinal truncation at +/- cutoff_sigma * sigma. Use 0.0 for no physical cut; the code then falls back to no_cut_span_sigma above.
+
   - name: 2nC, 10mm
     charge_nC: 2.0
     density:
       kind: gaussian
       sigma_mm: 10.0
       cutoff_sigma: 0.0
+
   - name: 1nC, 50mm
     charge_nC: 1.0
     density:
@@ -96,13 +120,21 @@ signal_cases:
       sigma_mm: 50.0
       cutoff_sigma: 0.0
 
+  # Arbitrary-density example:
+  # - name: custom_profile
+  #   charge_nC: 1.0  # The code first normalizes the shape below so its integral over z is 1, then multiplies by charge_nC to obtain the real bunch charge distribution.
+  #   density:
+  #     kind: arbitrary  # Use this when the bunch shape is not Gaussian.
+  #     interpolation_order: 5  # Fifth-order interpolation is recommended so the current profile is smooth, as requested.
+  #     samples: "{{-120,0.15},{-60,0.8},{0,1},{60,0.8},{120,0.15}}"  # Compact input format: each pair is {z_mm, relative_peakcurrent}. Values are arbitrary units before normalization.
+
 beam_grid:
-  x_half_size_mm: 30.0
-  y_half_size_mm: 30.0
-  nx: 51
-  ny: 51
-  linear_fit_half_range_mm: 10.0
-  polynomial_order: 5
+  x_half_size_mm: 30.0  # Half-width of the rectangular beam scan region in x. The code distributes particles uniformly from -x_half_size_mm to +x_half_size_mm.
+  y_half_size_mm: 30.0  # Half-height of the rectangular beam scan region in y. The code distributes particles uniformly from -y_half_size_mm to +y_half_size_mm.
+  nx: 51  # Number of beam sample positions along x inside the rectangle.
+  ny: 51  # Number of beam sample positions along y inside the rectangle.
+  linear_fit_half_range_mm: 10.0  # Half-range around the electrical center used for the linearity fit figure. Example: 10 mm means the fit uses positions between -10 mm and +10 mm.
+  polynomial_order: 5  # Polynomial order used for the higher-order correction fit shown in the polynomial-fit figure.
 
 output:
-  directory: outputs/template_run
+  directory: outputs/template_run  # Folder where all figures, tables, and the analysis report will be written for this YAML case.

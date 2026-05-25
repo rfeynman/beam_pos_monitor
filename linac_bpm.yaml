@@ -52,9 +52,18 @@ buttons:
 
 filter:
   characteristic_impedance_ohm: 50.0
+  # Use `auto` for code-calculated Fig. 3/Fig. 7 frequency ranges, or set
+  # {min_ghz: 0.01, max_ghz: 10.0}. Per-figure overrides are also allowed:
+  # {figure3: auto, figure7: {min_ghz: 0.01, max_ghz: 10.0}}
+  frequency_range: auto
+  # Use `auto` for Fig. 5 x-axis ending after input/output drop by 95%, or set
+  # {min_ns: 0.0, max_ns: 2.0}.
+  figure5_time_range: {min_ns: 0.0, max_ns: 1.0} 
   cable:
     enabled: true
-    attenuation_fc_hz: 4.65e8
+    length_m: 50.0
+    match_frequency_hz: 5.0e8
+    attenuation_db_per_100m: 18.0
   analog:
     type: lowpass_butter
     order: 4

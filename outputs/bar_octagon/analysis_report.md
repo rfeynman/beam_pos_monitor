@@ -6,6 +6,7 @@
 - Longitudinal image-charge denominator: 125.664 mm
 - Button capacitance used in signal model: 3.400 pF
 - Characteristic impedance: 50.0 ohm
+- Effective cable attenuation frequency `fc`: 4.657e+08 Hz
 
 ## Linearity
 
@@ -19,9 +20,9 @@
 ## Signal Summary
 
 - Peak voltage at button output: 1.439e+00 V
-- Peak voltage after cable model: 4.704e-01 V
-- Peak voltage after analog filter: 1.601e-02 V
-- RMS voltage after analog filter: 3.702e-03 V
+- Peak voltage after cable model: 4.708e-01 V
+- Peak voltage after analog filter: 1.603e-02 V
+- RMS voltage after analog filter: 3.705e-03 V
 
 ## Resolution
 

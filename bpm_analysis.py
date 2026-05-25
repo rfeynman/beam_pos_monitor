@@ -788,6 +788,182 @@ def spectrum_fft_size_for_filters(n_signal: int, dt: float, filters: list[dict[s
     return nearest_pow2(max(base_fft, required))
 
 
+def spectrum_fft_size_for_button_impedance(n_signal: int, dt: float, z0: float, capacitance_f: float) -> int:
+    """Choose a Fig. 3 FFT size that resolves the button RC roll-off.
+
+    Args:
+        n_signal:
+            Number of time-domain samples in the image-current waveform.
+        dt:
+            Time step in seconds.
+        z0:
+            Cable/reference impedance in ohms.
+        capacitance_f:
+            Button capacitance in farads.
+
+    Returns:
+        Power-of-two FFT length. The value is capped to keep very short bunch
+        cases practical while still extending far beyond the old fixed 10 GHz
+        plotting range.
+    """
+    base_fft = nearest_pow2(max(n_signal, 2))
+    if z0 <= 0.0 or capacitance_f <= 0.0:
+        return base_fft
+    rc_hz = 1.0 / (2.0 * math.pi * z0 * capacitance_f)
+    target_df_hz = rc_hz / 40.0
+    required = int(math.ceil(1.0 / (dt * target_df_hz)))
+    return min(nearest_pow2(max(base_fft, required)), 4_194_304)
+
+
+def auto_log_frequency_xlim(
+    freqs_hz: np.ndarray,
+    curves: list[np.ndarray],
+    rel_floor: float = 1e-3,
+    pad_decades: float = 0.12,
+) -> tuple[float, float]:
+    """Choose log-frequency axis limits from plotted curve amplitudes.
+
+    Args:
+        freqs_hz:
+            Frequency samples in Hz.
+        curves:
+            Curves plotted against ``freqs_hz``. Each curve is normalized by
+            its own peak before thresholding, so voltage, impedance, and filter
+            transfer curves can be mixed.
+        rel_floor:
+            Relative level that defines the useful plotted bandwidth. A value of
+            ``1e-3`` means the axis extends until each curve has dropped to about
+            0.1% of its own peak, which is a practical "near noise floor" for
+            these diagnostic plots.
+        pad_decades:
+            Small log-space padding added around the active frequency range.
+
+    Returns:
+        ``(f_min_ghz, f_max_ghz)`` suitable for ``set_xlim``.
+    """
+    freqs = np.asarray(freqs_hz, dtype=float)
+    positive = np.isfinite(freqs) & (freqs > 0.0)
+    if not np.any(positive):
+        return 1e-3, 1.0
+
+    active = np.zeros_like(freqs, dtype=bool)
+    for curve in curves:
+        values = np.abs(np.asarray(curve, dtype=float))
+        valid = positive & np.isfinite(values) & (values > 0.0)
+        if not np.any(valid):
+            continue
+        peak = float(np.nanmax(values[valid]))
+        if peak <= 0.0:
+            continue
+        active |= valid & (values >= rel_floor * peak)
+
+    if not np.any(active):
+        active = positive
+
+    active_freqs = freqs[active]
+    available_freqs = freqs[positive]
+    log_low = math.log10(float(active_freqs.min())) - pad_decades
+    log_high = math.log10(float(active_freqs.max())) + pad_decades
+    low_hz = max(float(available_freqs.min()), 10.0**log_low)
+    high_hz = min(float(available_freqs.max()), 10.0**log_high)
+    if high_hz <= low_hz:
+        high_hz = min(float(available_freqs.max()), low_hz * 10.0)
+    return low_hz * 1e-9, high_hz * 1e-9
+
+
+def configured_frequency_xlim(
+    range_cfg: Any,
+    figure_key: str,
+    auto_xlim: tuple[float, float],
+) -> tuple[float, float]:
+    """Resolve YAML frequency-axis settings for Fig. 3/Fig. 7.
+
+    Accepted YAML forms:
+
+    - ``frequency_range: auto``
+    - ``frequency_range: {min_ghz: 0.01, max_ghz: 10}``
+    - ``frequency_range: {figure3: auto, figure7: {min_ghz: 0.01, max_ghz: 10}}``
+    - ``frequency_range: [0.01, 10]``
+
+    Args:
+        range_cfg:
+            Parsed YAML value from ``filter.frequency_range``.
+        figure_key:
+            Either ``figure3`` or ``figure7``.
+        auto_xlim:
+            Automatically calculated ``(min_ghz, max_ghz)`` fallback.
+
+    Returns:
+        Frequency x-limits in GHz.
+    """
+    selected = range_cfg
+    if selected is None:
+        return auto_xlim
+    if isinstance(selected, str):
+        if selected.lower() == "auto":
+            return auto_xlim
+        raise ValueError("`filter.frequency_range` must be `auto`, [min_ghz, max_ghz], or a mapping.")
+    if isinstance(selected, (list, tuple)):
+        if len(selected) != 2:
+            raise ValueError("List-style `filter.frequency_range` must contain exactly [min_ghz, max_ghz].")
+        low, high = float(selected[0]), float(selected[1])
+    elif isinstance(selected, dict):
+        if figure_key in selected:
+            return configured_frequency_xlim(selected[figure_key], figure_key, auto_xlim)
+        if str(selected.get("mode", "")).lower() == "auto":
+            return auto_xlim
+        if "min_ghz" not in selected or "max_ghz" not in selected:
+            return auto_xlim
+        low, high = float(selected["min_ghz"]), float(selected["max_ghz"])
+    else:
+        raise ValueError("`filter.frequency_range` must be `auto`, [min_ghz, max_ghz], or a mapping.")
+
+    if low <= 0.0 or high <= low:
+        raise ValueError("Frequency range must satisfy 0 < min_ghz < max_ghz.")
+    return low, high
+
+
+def configured_time_xlim_ns(range_cfg: Any, auto_xlim: tuple[float, float]) -> tuple[float, float]:
+    """Resolve YAML time-axis settings for Fig. 5.
+
+    Accepted YAML forms:
+
+    - ``figure5_time_range: auto``
+    - ``figure5_time_range: {min_ns: 0.0, max_ns: 2.0}``
+    - ``figure5_time_range: [0.0, 2.0]``
+
+    Args:
+        range_cfg:
+            Parsed YAML value from ``filter.figure5_time_range``.
+        auto_xlim:
+            Automatically calculated ``(min_ns, max_ns)`` fallback.
+
+    Returns:
+        Time x-limits in ns.
+    """
+    if range_cfg is None:
+        return auto_xlim
+    if isinstance(range_cfg, str):
+        if range_cfg.lower() == "auto":
+            return auto_xlim
+        raise ValueError("`filter.figure5_time_range` must be `auto`, [min_ns, max_ns], or a mapping.")
+    if isinstance(range_cfg, (list, tuple)):
+        if len(range_cfg) != 2:
+            raise ValueError("List-style `filter.figure5_time_range` must contain exactly [min_ns, max_ns].")
+        low, high = float(range_cfg[0]), float(range_cfg[1])
+    elif isinstance(range_cfg, dict):
+        if str(range_cfg.get("mode", "")).lower() == "auto":
+            return auto_xlim
+        if "min_ns" not in range_cfg or "max_ns" not in range_cfg:
+            return auto_xlim
+        low, high = float(range_cfg["min_ns"]), float(range_cfg["max_ns"])
+    else:
+        raise ValueError("`filter.figure5_time_range` must be `auto`, [min_ns, max_ns], or a mapping.")
+    if high <= low:
+        raise ValueError("Fig. 5 time range must satisfy min_ns < max_ns.")
+    return low, high
+
+
 def apply_frequency_response(signal_t: np.ndarray, response: np.ndarray) -> np.ndarray:
     """Apply a real frequency-domain transfer function to a time signal.
 
@@ -828,6 +1004,115 @@ def image_charge_denominator_m(boundary: Boundary, cfg: dict[str, Any]) -> float
     if "image_charge_denominator_mm" in signal_model:
         return float(signal_model["image_charge_denominator_mm"]) * 1e-3
     return boundary.perimeter * 1e-3
+
+
+def cable_attenuation_fc_hz(cable_cfg: dict[str, Any]) -> float:
+    """Resolve the skin-effect cable attenuation frequency ``fc``.
+
+    The BAR note defines ``fc`` as the frequency at which the cable amplitude is
+    attenuated by a factor of ``e``:
+
+        |H(f)| = exp(-sqrt(f / fc)).
+
+    If ``attenuation_fc_hz`` is supplied directly, that value is used. Otherwise
+    the code derives ``fc`` from physical cable data:
+
+        total_loss_dB = attenuation_db_per_100m * length_m / 100
+        sqrt(f_ref / fc) = ln(10) * total_loss_dB / 20
+
+    Args:
+        cable_cfg:
+            ``filter.cable`` block from YAML.
+
+    Returns:
+        Effective ``fc`` in Hz, or ``0`` if the cable is disabled.
+    """
+    if not cable_cfg.get("enabled", False):
+        return 0.0
+    if "attenuation_fc_hz" in cable_cfg:
+        return float(cable_cfg["attenuation_fc_hz"])
+
+    try:
+        length_m = float(cable_cfg["length_m"])
+        match_frequency_hz = float(cable_cfg.get("match_frequency_hz", cable_cfg.get("reference_frequency_hz")))
+        attenuation_db_per_100m = float(cable_cfg["attenuation_db_per_100m"])
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            "Cable attenuation requires either `attenuation_fc_hz` or all of "
+            "`length_m`, `match_frequency_hz`, and `attenuation_db_per_100m`."
+        ) from exc
+
+    total_loss_db = attenuation_db_per_100m * length_m / 100.0
+    exponent_at_match = math.log(10.0) * total_loss_db / 20.0
+    if match_frequency_hz <= 0.0 or exponent_at_match <= 0.0:
+        raise ValueError("Cable length, match frequency, and attenuation must be positive.")
+    return match_frequency_hz / (exponent_at_match**2)
+
+
+def cable_transfer_response(freqs_hz: np.ndarray, cable_cfg: dict[str, Any]) -> np.ndarray:
+    """Evaluate the complex skin-effect cable transfer response.
+
+    Args:
+        freqs_hz:
+            One-sided FFT frequency grid in Hz.
+        cable_cfg:
+            ``filter.cable`` block from YAML.
+
+    Returns:
+        Complex cable response sampled on ``freqs_hz``.
+    """
+    response = np.ones_like(freqs_hz, dtype=complex)
+    if cable_cfg.get("enabled", False):
+        fc_hz = cable_attenuation_fc_hz(cable_cfg)
+        sqrt_loss = np.sqrt(np.maximum(freqs_hz, 0.0) / fc_hz)
+        include_phase = bool(cable_cfg.get("skin_effect_phase", True))
+        # README Eq. (1.6): the skin-effect cable model is
+        # H_cable(f) = exp(-(1 + i) * sqrt(f / fc)).  The real part gives the
+        # attenuation and the imaginary part gives the dispersive delay.
+        phase_factor = 1.0j if include_phase else 0.0
+        response *= np.exp(-(1.0 + phase_factor) * sqrt_loss)
+    return response
+
+
+def cable_tail_time_s(signal_data: dict[str, np.ndarray | float]) -> float:
+    """Choose a zero-padded time tail for Fig. 5 cable-input/output plots."""
+    z0 = float(signal_data["characteristic_impedance_ohm"])
+    capacitance_f = float(signal_data["button_capacitance_f"])
+    rc_tail_s = 20.0 * z0 * capacitance_f
+    fc_hz = float(signal_data.get("cable_attenuation_fc_hz", 0.0))
+    cable_tail_s = 8.0 / fc_hz if fc_hz > 0.0 else 0.0
+    return max(rc_tail_s, cable_tail_s)
+
+
+def cable_io_waveforms_for_plot(signal_data: dict[str, np.ndarray | float]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute Fig. 5 input/output waveforms with enough zero-padded tail.
+
+    ``build_signal_base`` keeps arrays on the bunch sampling window used by the
+    rest of the analysis. Fig. 5 needs a longer time axis for short bunches so
+    the button RC response and the cable output can decay back near zero.
+    """
+    image_current = np.asarray(signal_data["image_current_a"])
+    t_s = np.asarray(signal_data["t_s"])
+    dt = float(signal_data["dt_s"])
+    z0 = float(signal_data["characteristic_impedance_ohm"])
+    capacitance_f = float(signal_data["button_capacitance_f"])
+    tail_samples = int(math.ceil(cable_tail_time_s(signal_data) / dt))
+    n_time = len(image_current) + max(0, tail_samples)
+    n_fft = min(nearest_pow2(n_time), 4_194_304)
+    freqs_hz = np.fft.rfftfreq(n_fft, d=dt)
+    omega = 2.0 * math.pi * freqs_hz
+    current_spec = np.fft.rfft(image_current, n=n_fft)
+    z_button = 1.0 / (1.0 / z0 + 1j * omega * capacitance_f)
+    cable_cfg = {
+        "enabled": bool(signal_data.get("cable_enabled", False)),
+        "attenuation_fc_hz": float(signal_data.get("cable_attenuation_fc_hz", 1.0)),
+        "skin_effect_phase": bool(signal_data.get("cable_skin_effect_phase", True)),
+    }
+    cable_response = cable_transfer_response(freqs_hz, cable_cfg)
+    v_button = np.fft.irfft(current_spec * z_button, n=n_fft)
+    v_cable = np.fft.irfft(current_spec * z_button * cable_response, n=n_fft)
+    t_plot_s = float(t_s[0]) + np.arange(n_fft, dtype=float) * dt
+    return t_plot_s, v_button, v_cable
 
 
 def build_signal_base(
@@ -902,17 +1187,8 @@ def build_signal_base(
     v_button = np.fft.irfft(current_spec * z_button, n=n_fft)[: len(t_s)]
 
     cable_cfg = cfg["filter"].get("cable", {})
-    response = np.ones_like(freqs, dtype=complex)
-    if cable_cfg.get("enabled", False):
-        fc_hz = float(cable_cfg["attenuation_fc_hz"])
-        sqrt_loss = np.sqrt(np.maximum(freqs, 0.0) / fc_hz)
-        include_phase = bool(cable_cfg.get("skin_effect_phase", True))
-        # README Eq. (1.6): the skin-effect cable model is
-        # H_cable(f) = exp(-(1 + i) * sqrt(f / fc)).  The real part gives the
-        # LMR240 attenuation quoted in the BAR note, while the imaginary part
-        # gives the dispersive delay seen in BAR Fig. 5.
-        phase_factor = 1.0j if include_phase else 0.0
-        response *= np.exp(-(1.0 + phase_factor) * sqrt_loss)
+    effective_cable_fc_hz = cable_attenuation_fc_hz(cable_cfg)
+    response = cable_transfer_response(freqs, cable_cfg)
     v_cable = apply_frequency_response(v_button, response)
 
     return {
@@ -934,6 +1210,9 @@ def build_signal_base(
         "button_capacitance_f": capacitance_f,
         "characteristic_impedance_ohm": z0,
         "cable_transfer_abs": np.abs(response),
+        "cable_enabled": bool(cable_cfg.get("enabled", False)),
+        "cable_attenuation_fc_hz": effective_cable_fc_hz,
+        "cable_skin_effect_phase": bool(cable_cfg.get("skin_effect_phase", True)),
         "image_charge_denominator_m": image_denominator_m,
         "charge_nC": float(bunch_cfg["charge_nC"]),
         "sigma_z_m": sigma_z_m,
@@ -1223,18 +1502,32 @@ def plot_polyfit(
     plt.close(fig)
 
 
-def plot_resolution(output_path: Path, rel: np.ndarray, sigma_x: np.ndarray, sigma_y: np.ndarray) -> None:
+def plot_resolution(
+    output_path: Path,
+    rel: np.ndarray,
+    sigma_x: np.ndarray,
+    sigma_y: np.ndarray,
+    signal_data: dict[str, np.ndarray | float],
+) -> None:
     """Plot the Fig. 13 style BPM resolution curves."""
     fig, ax = plt.subplots(figsize=(6.4, 4.8))
-    ax.loglog(rel, sigma_x, color="royalblue", linewidth=1.8, label="hor")
-    ax.loglog(rel, sigma_y, color="crimson", linewidth=1.8, label="ver")
+    fig.suptitle(signal_title(signal_data))
+    ax.loglog(rel, sigma_x, color="royalblue", linewidth=2.0, linestyle="--", label="hor")
+    ax.loglog(rel, sigma_y, color="crimson", linewidth=1.8, linestyle=(0, (5, 2)), label="ver")
     ax.set_xlabel(r"$\sigma_V / V$")
     ax.set_ylabel(r"$\sigma_x, \sigma_y$ (mm)")
     ax.grid(True, which="both", alpha=0.3)
     ax.legend(loc="upper left")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
+
+
+def signal_title(signal_data: dict[str, np.ndarray | float]) -> str:
+    """Format the default bunch charge and RMS length for figure titles."""
+    charge_nC = float(signal_data["charge_nC"])
+    sigma_mm = 1e3 * float(signal_data["sigma_z_m"])
+    return f"Charge = {charge_nC:.3g} nC, Beam sigma = {sigma_mm:.3g} mm"
 
 
 def plot_signal_summary(
@@ -1395,24 +1688,37 @@ def post_peak_decay_time_ns(
     return float(min(max(t_ns[-1], min_end_ns), max(float(t_ns[end_idx]) + pad_ns, min_end_ns)))
 
 
-def plot_fig3_impedance_current_spectrum(output_path: Path, signal_data: dict[str, np.ndarray | float]) -> None:
+def plot_fig3_impedance_current_spectrum(
+    output_path: Path,
+    signal_data: dict[str, np.ndarray | float],
+    frequency_range_cfg: Any = "auto",
+) -> None:
     """Plot BAR-like Fig. 3: button impedance and FFT magnitude of image current."""
-    f_ghz = np.asarray(signal_data["freqs_hz"]) * 1e-9
-    z_abs = np.asarray(signal_data["button_impedance_ohm_abs"])
-    i_abs = 1e3 * np.asarray(signal_data["image_current_fft_abs"])
+    dt = float(signal_data["dt_s"])
+    image_current = np.asarray(signal_data["image_current_a"])
+    z0 = float(signal_data["characteristic_impedance_ohm"])
+    capacitance_f = float(signal_data["button_capacitance_f"])
+    n_fft = spectrum_fft_size_for_button_impedance(len(image_current), dt, z0, capacitance_f)
+    freqs_hz = np.fft.rfftfreq(n_fft, d=dt)
+    f_ghz = freqs_hz * 1e-9
+    omega = 2.0 * math.pi * freqs_hz
+    z_abs = np.abs(1.0 / (1.0 / z0 + 1j * omega * capacitance_f))
+    i_abs = 1e3 * np.abs(np.fft.rfft(image_current, n=n_fft))
 
     fig, ax1 = plt.subplots(figsize=(6.8, 4.8))
+    fig.suptitle(signal_title(signal_data))
     ax2 = ax1.twinx()
     ax1.loglog(f_ghz[1:], z_abs[1:], color="tab:blue", linewidth=1.8, label="impedance")
     ax2.loglog(f_ghz[1:], i_abs[1:], color="tab:red", linewidth=1.8, label="current")
     ax1.set_xlabel("f (GHz)")
     ax1.set_ylabel("|Zb| (ohm)")
     ax2.set_ylabel("|I| (mA)")
-    ax1.set_xlim(1e-2, 1e1)
+    auto_xlim = auto_log_frequency_xlim(freqs_hz, [z_abs, i_abs], rel_floor=1e-3)
+    ax1.set_xlim(*configured_frequency_xlim(frequency_range_cfg, "figure3", auto_xlim))
     ax1.grid(True, which="both", alpha=0.3)
     lines = ax1.get_lines() + ax2.get_lines()
     ax1.legend(lines, [line.get_label() for line in lines], loc="lower left")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
 
@@ -1424,6 +1730,7 @@ def plot_fig4_current_voltage(output_path: Path, signal_data: dict[str, np.ndarr
     v_b = np.asarray(signal_data["button_voltage_v"])
 
     fig, ax1 = plt.subplots(figsize=(6.8, 4.8))
+    fig.suptitle(signal_title(signal_data))
     ax2 = ax1.twinx()
     ax1.plot(t_ns, i_ma, color="tab:blue", linewidth=1.8, label="image current")
     ax2.plot(t_ns, v_b, color="tab:red", linewidth=1.8, label="button voltage")
@@ -1433,25 +1740,35 @@ def plot_fig4_current_voltage(output_path: Path, signal_data: dict[str, np.ndarr
     ax1.grid(True, alpha=0.3)
     lines = ax1.get_lines() + ax2.get_lines()
     ax1.legend(lines, [line.get_label() for line in lines], loc="upper right")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
 
 
-def plot_fig5_cable_io(output_path: Path, signal_data: dict[str, np.ndarray | float]) -> None:
+def plot_fig5_cable_io(
+    output_path: Path,
+    signal_data: dict[str, np.ndarray | float],
+    time_range_cfg: Any = "auto",
+) -> None:
     """Plot BAR-like Fig. 5: button voltage at cable input and output."""
-    t_ns = np.asarray(signal_data["t_s"]) * 1e9
-    v_b = np.asarray(signal_data["button_voltage_v"])
-    v_c = np.asarray(signal_data["cable_voltage_v"])
+    t_plot_s, v_b, v_c = cable_io_waveforms_for_plot(signal_data)
+    t_ns = (t_plot_s - t_plot_s[0]) * 1e9
 
     fig, ax = plt.subplots(figsize=(6.8, 4.8))
+    fig.suptitle(signal_title(signal_data))
     ax.plot(t_ns, v_b, color="tab:blue", linewidth=1.8, label="input")
     ax.plot(t_ns, v_c, color="tab:red", linewidth=1.8, label="output")
+    x_end_ns = max(
+        post_peak_decay_time_ns(t_ns, v_b, remaining_fraction=0.05, min_end_ns=0.1),
+        post_peak_decay_time_ns(t_ns, v_c, remaining_fraction=0.05, min_end_ns=0.1),
+    )
+    ax.set_xlim(*configured_time_xlim_ns(time_range_cfg, (0.0, x_end_ns)))
+    ax.margins(x=0.0)
     ax.set_xlabel("t (ns)")
     ax.set_ylabel("Vb, Vc (V)")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="upper right")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
 
@@ -1460,6 +1777,7 @@ def plot_fig7_frequency_filters(
     output_path: Path,
     signal_data: dict[str, np.ndarray | float],
     comparison_filters: list[dict[str, Any]],
+    frequency_range_cfg: Any = "auto",
 ) -> None:
     """Plot BAR-like Fig. 7 for one or more comparison filters.
 
@@ -1484,6 +1802,7 @@ def plot_fig7_frequency_filters(
 
     ncols = len(comparison_filters)
     fig, axes = plt.subplots(1, ncols, figsize=(6.6 * ncols, 4.8), squeeze=False)
+    fig.suptitle(signal_title(signal_data))
     for ax, filt in zip(axes[0], comparison_filters):
         h = analog_transfer_complex(freqs_hz, dt, filt)
         vf_fft = 1e3 * np.abs(np.fft.rfft(v_cable, n=n_fft) * h) / n_fft
@@ -1498,14 +1817,15 @@ def plot_fig7_frequency_filters(
         ax.set_xlabel("f (GHz)")
         ax.set_ylabel("V (mV)")
         ax2.set_ylabel("|H|")
-        ax.set_xlim(1e-2, 1e1)
+        auto_xlim = auto_log_frequency_xlim(freqs_hz, [v_b_fft, v_c_fft, vf_fft, h_abs], rel_floor=1e-3)
+        ax.set_xlim(*configured_frequency_xlim(frequency_range_cfg, "figure7", auto_xlim))
         ax.set_ylim(bottom=1e-4)
         ax2.set_ylim(0.0, max(1.05, 1.05 * float(np.nanmax(h_abs))))
         ax.set_title(str(filt.get("name", filt.get("type", "filter"))))
         ax.grid(True, which="both", alpha=0.3)
         lines = ax.get_lines() + ax2.get_lines()
         ax.legend(lines, [line.get_label() for line in lines], loc="lower left")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.93))
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
 
@@ -1522,6 +1842,7 @@ def plot_fig8_filter_outputs(
     v_cable = np.asarray(signal_data["cable_voltage_v"])
 
     fig, ax = plt.subplots(figsize=(6.8, 4.8))
+    fig.suptitle(signal_title(signal_data))
     x_end_ns = 0.0
     for filt in comparison_filters:
         vf, t_s = apply_analog_filter_causal(v_cable, dt, filt)
@@ -1537,7 +1858,7 @@ def plot_fig8_filter_outputs(
     ax.set_ylabel("Vf (V)")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="upper right")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
 
@@ -1642,6 +1963,7 @@ def write_report(
     cap_pf = float(signal_data["button_capacitance_f"]) * 1e12
     z0 = float(signal_data["characteristic_impedance_ohm"])
     image_denominator_mm = float(signal_data["image_charge_denominator_m"]) * 1e3
+    cable_fc_hz = float(signal_data["cable_attenuation_fc_hz"])
 
     sigma_x_ref_mm = 0.5 * kx_mm * reference_rel_error
     sigma_y_ref_mm = 0.5 * ky_mm * reference_rel_error
@@ -1664,6 +1986,7 @@ def write_report(
         f"- Longitudinal image-charge denominator: {image_denominator_mm:.3f} mm",
         f"- Button capacitance used in signal model: {cap_pf:.3f} pF",
         f"- Characteristic impedance: {z0:.1f} ohm",
+        f"- Effective cable attenuation frequency `fc`: {cable_fc_hz:.3e} Hz",
         "",
         "## Linearity",
         "",
@@ -1746,7 +2069,10 @@ def run(cfg_path: Path) -> dict[str, Path]:
     poly_rms_mm, poly_max_mm = residual_metrics(beam_xy_mm, fit_xy_mm)
 
     signal_data = signal_chain(boundary, cfg)
-    comparison_filters = cfg.get("filter", {}).get("comparison_filters", [])
+    filter_cfg = cfg.get("filter", {})
+    comparison_filters = filter_cfg.get("comparison_filters", [])
+    frequency_range_cfg = filter_cfg.get("frequency_range", "auto")
+    figure5_time_range_cfg = filter_cfg.get("figure5_time_range", "auto")
     signal_cases = cfg.get("signal_cases", [])
     resolution_cfg = cfg.get("filter", {}).get("resolution", {})
     rel, sigma_x, sigma_y = resolution_curves(kx_mm, ky_mm, resolution_cfg)
@@ -1766,12 +2092,12 @@ def run(cfg_path: Path) -> dict[str, Path]:
 
     plot_linearity(linearity_path, boundary, masks, colors, beam_xy_mm, measured_xy_mm)
     plot_polyfit(polyfit_path, boundary, masks, colors, beam_xy_mm, fit_xy_mm)
-    plot_resolution(resolution_path, rel, sigma_x, sigma_y)
+    plot_resolution(resolution_path, rel, sigma_x, sigma_y, signal_data)
     plot_signal_summary(signal_path, signal_data, comparison_filters)
-    plot_fig3_impedance_current_spectrum(fig3_path, signal_data)
+    plot_fig3_impedance_current_spectrum(fig3_path, signal_data, frequency_range_cfg)
     plot_fig4_current_voltage(fig4_path, signal_data)
-    plot_fig5_cable_io(fig5_path, signal_data)
-    plot_fig7_frequency_filters(fig7_path, signal_data, comparison_filters)
+    plot_fig5_cable_io(fig5_path, signal_data, figure5_time_range_cfg)
+    plot_fig7_frequency_filters(fig7_path, signal_data, comparison_filters, frequency_range_cfg)
     plot_fig8_filter_outputs(fig8_path, signal_data, comparison_filters)
     plot_fig9_button_voltage_cases(fig9_path, boundary, cfg, signal_cases)
     write_report(
