@@ -2019,11 +2019,16 @@ def write_report(
             "The sample polygon was taken from the BAR note figures because `BeampositionMonitor.gdf` was not found in the local Research tree."
         )
     effective_bunch = resolve_default_bunch_cfg(cfg)
-    if effective_bunch["density"]["kind"].lower() == "gaussian" and float(effective_bunch["density"].get("cutoff_sigma", 0.0)) == 0.0:
+    effective_density = effective_bunch["density"]
+    signal_cases = cfg.get("signal_cases", [])
+    default_case_name = str(signal_cases[0].get("name", "")) if signal_cases else ""
+    if effective_density["kind"].lower() == "gaussian" and float(effective_density.get("cutoff_sigma", 0.0)) == 0.0:
         notes.append("The uncapped Gaussian is evaluated on a finite numerical window set by `bunch.longitudinal_grid.no_cut_span_sigma`.")
 
+    report_name = cfg_path.stem.replace("_", " ").replace("-", " ").upper()
+
     lines = [
-        "# BAR BPM Analysis Report",
+        f"# {report_name} Analysis Report",
         "",
         f"- Config: `{cfg_path}`",
         f"- Chamber type: `{cfg['chamber']['kind']}`",
@@ -2033,6 +2038,47 @@ def write_report(
         f"- Characteristic impedance: {z0:.1f} ohm",
         f"- Effective cable attenuation frequency `fc`: {cable_fc_hz:.3e} Hz",
         "",
+        "## Beam Parameters",
+        "",
+    ]
+
+    if default_case_name:
+        lines.append(f"- Default signal case used for the main results: `{default_case_name}`")
+    else:
+        lines.append("- Default signal case used for the main results: top-level `bunch` block")
+
+    lines.extend(
+        [
+            f"- Bunch charge: {float(signal_data['charge_nC']):.6g} nC",
+            f"- Density kind: `{effective_density['kind']}`",
+        ]
+    )
+
+    if effective_density["kind"].lower() == "gaussian":
+        lines.extend(
+            [
+                f"- Input Gaussian sigma: {float(effective_density['sigma_mm']):.6g} mm",
+                f"- Gaussian cutoff_sigma: {float(effective_density.get('cutoff_sigma', 0.0)):.6g}",
+                f"- RMS sigma reconstructed from the normalized longitudinal profile: {float(signal_data['sigma_z_m']) * 1e3:.6g} mm",
+            ]
+        )
+    else:
+        samples = effective_density.get("samples", [])
+        sample_summary = samples if isinstance(samples, str) else f"{len(samples)} points"
+        lines.extend(
+            [
+                "- Density input: arbitrary sampled profile",
+                f"- Arbitrary profile samples: `{sample_summary}`",
+                f"- Interpolation order: {int(effective_density.get('interpolation_order', 5))}",
+                f"- RMS sigma reconstructed from the normalized longitudinal profile: {float(signal_data['sigma_z_m']) * 1e3:.6g} mm",
+            ]
+        )
+
+    lines.extend(
+        [
+            f"- Longitudinal grid_number: {int(effective_bunch.get('longitudinal_grid', {}).get('grid_number', 200))}",
+            f"- No-cut span sigma: {float(effective_bunch.get('longitudinal_grid', {}).get('no_cut_span_sigma', 8.0)):.6g}",
+            "",
         "## Linearity",
         "",
         f"- Linear scale factor `Kx`: {kx_mm:.3f} mm",
@@ -2055,7 +2101,8 @@ def write_report(
         f"- Estimated horizontal resolution at the reference point: {sigma_x_ref_mm * 1e3:.2f} um",
         f"- Estimated vertical resolution at the reference point: {sigma_y_ref_mm * 1e3:.2f} um",
         "",
-    ]
+        ]
+    )
 
     if notes:
         lines.extend(["## Notes", ""])

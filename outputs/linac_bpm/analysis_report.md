@@ -1,4 +1,4 @@
-# BAR BPM Analysis Report
+# LINAC BPM Analysis Report
 
 - Config: `/Users/wange/Coding/Python/bpm/linac_bpm.yaml`
 - Chamber type: `round`
@@ -7,6 +7,17 @@
 - Button capacitance used in signal model: 3.400 pF
 - Characteristic impedance: 50.0 ohm
 - Effective cable attenuation frequency `fc`: 4.657e+08 Hz
+
+## Beam Parameters
+
+- Default signal case used for the main results: `1nC, 1mm`
+- Bunch charge: 1 nC
+- Density kind: `gaussian`
+- Input Gaussian sigma: 1 mm
+- Gaussian cutoff_sigma: 0
+- RMS sigma reconstructed from the normalized longitudinal profile: 1 mm
+- Longitudinal grid_number: 200
+- No-cut span sigma: 8
 
 ## Linearity
 
