@@ -10,12 +10,12 @@
 
 ## Linearity
 
-- Linear scale factor `Kx`: 36.254 mm
-- Linear scale factor `Ky`: 36.254 mm
-- RMS position error before polynomial correction: 5232.18 um
-- Max position error before polynomial correction: 8.819 mm
-- RMS position error after polynomial correction: 2594.69 um
-- Max position error after polynomial correction: 6.835 mm
+- Linear scale factor `Kx`: 36.219 mm
+- Linear scale factor `Ky`: 36.219 mm
+- RMS position error before polynomial correction: 2452.34 um
+- Max position error before polynomial correction: 6.327 mm
+- RMS position error after polynomial correction: 1992.44 um
+- Max position error after polynomial correction: 4.397 mm
 
 ## Signal Summary
 
@@ -27,8 +27,8 @@
 ## Resolution
 
 - Reference relative voltage error `sigma_V / V`: 0.0016
-- Estimated horizontal resolution at the reference point: 29.00 um
-- Estimated vertical resolution at the reference point: 29.00 um
+- Estimated horizontal resolution at the reference point: 28.98 um
+- Estimated vertical resolution at the reference point: 28.98 um
 
 ## Notes
 

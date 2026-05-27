@@ -519,7 +519,32 @@ def polynomial_terms(x: np.ndarray, y: np.ndarray, order: int) -> np.ndarray:
     return np.column_stack(columns)
 
 
-def fit_polynomial_map(measured_xy_mm: np.ndarray, true_xy_mm: np.ndarray, order: int) -> tuple[np.ndarray, np.ndarray]:
+def polynomial_normalization_scales(measured_xy_mm: np.ndarray) -> tuple[float, float]:
+    """Return coordinate scales used to stabilize the polynomial correction fit.
+
+    Physics reference:
+        This does not change the underlying correction model in `README.md`
+        Eq. (1.11). It only rescales the measured coordinates before building
+        powers ``X^i Y^j`` so the least-squares system is better conditioned.
+
+    Args:
+        measured_xy_mm:
+            Raw BPM coordinates ``(X, Y)`` in mm.
+
+    Returns:
+        Tuple ``(sx_mm, sy_mm)``. Each scale is the maximum absolute value of
+        the corresponding measured coordinate, with a floor of 1 mm.
+    """
+    sx_mm = max(float(np.max(np.abs(measured_xy_mm[:, 0]))), 1.0)
+    sy_mm = max(float(np.max(np.abs(measured_xy_mm[:, 1]))), 1.0)
+    return sx_mm, sy_mm
+
+
+def fit_polynomial_map(
+    measured_xy_mm: np.ndarray,
+    true_xy_mm: np.ndarray,
+    order: int,
+) -> tuple[np.ndarray, np.ndarray, float, float]:
     """Fit the nonlinear map from measured BPM coordinates to true beam position.
 
     Physics reference:
@@ -534,17 +559,34 @@ def fit_polynomial_map(measured_xy_mm: np.ndarray, true_xy_mm: np.ndarray, order
             Polynomial order used for the 2D correction map.
 
     Returns:
-        Tuple of coefficient vectors ``(coef_x, coef_y)``.
+        Tuple ``(coef_x, coef_y, sx_mm, sy_mm)`` containing the polynomial
+        coefficients and the measured-coordinate normalization scales.
     """
     # README Eq. (1.11): x(X,Y), y(X,Y) are represented by a 2D polynomial basis and
     # fitted in a least-squares sense from measured coordinates back to true coordinates.
-    basis = polynomial_terms(measured_xy_mm[:, 0], measured_xy_mm[:, 1], order)
+    #
+    # The raw BPM coordinates can be tens of millimeters. Raising them to fifth
+    # or sixth powers makes the Vandermonde-like matrix badly conditioned, which
+    # corrupts the nonlinear correction. We therefore normalize X and Y before
+    # building the polynomial basis. This changes only the numerical stability of
+    # the fit, not the physics model.
+    sx_mm, sy_mm = polynomial_normalization_scales(measured_xy_mm)
+    x_scaled = measured_xy_mm[:, 0] / sx_mm
+    y_scaled = measured_xy_mm[:, 1] / sy_mm
+    basis = polynomial_terms(x_scaled, y_scaled, order)
     coef_x, *_ = np.linalg.lstsq(basis, true_xy_mm[:, 0], rcond=None)
     coef_y, *_ = np.linalg.lstsq(basis, true_xy_mm[:, 1], rcond=None)
-    return coef_x, coef_y
+    return coef_x, coef_y, sx_mm, sy_mm
 
 
-def apply_polynomial_map(measured_xy_mm: np.ndarray, coef_x: np.ndarray, coef_y: np.ndarray, order: int) -> np.ndarray:
+def apply_polynomial_map(
+    measured_xy_mm: np.ndarray,
+    coef_x: np.ndarray,
+    coef_y: np.ndarray,
+    order: int,
+    sx_mm: float,
+    sy_mm: float,
+) -> np.ndarray:
     """Evaluate the fitted nonlinear BPM correction map.
 
     Args:
@@ -555,11 +597,14 @@ def apply_polynomial_map(measured_xy_mm: np.ndarray, coef_x: np.ndarray, coef_y:
             :func:`fit_polynomial_map`.
         order:
             Polynomial order used to construct the basis.
+        sx_mm, sy_mm:
+            Measured-coordinate normalization scales returned by
+            :func:`fit_polynomial_map`.
 
     Returns:
         Corrected coordinates of shape ``(Npoints, 2)`` in mm.
     """
-    basis = polynomial_terms(measured_xy_mm[:, 0], measured_xy_mm[:, 1], order)
+    basis = polynomial_terms(measured_xy_mm[:, 0] / sx_mm, measured_xy_mm[:, 1] / sy_mm, order)
     return np.column_stack([basis @ coef_x, basis @ coef_y])
 
 
@@ -1468,7 +1513,7 @@ def plot_linearity(
     fig, ax = plt.subplots(figsize=(8.5, 5.0))
     plot_boundary(ax, boundary, button_masks_arr, button_colors)
     ax.scatter(true_xy_mm[:, 0], true_xy_mm[:, 1], s=8, color="royalblue", marker="s", linewidths=0.0, label="input")
-    ax.scatter(measured_xy_mm[:, 0], measured_xy_mm[:, 1], s=10, color="crimson", marker=".", linewidths=0.0, label="measured")
+    ax.scatter(measured_xy_mm[:, 0], measured_xy_mm[:, 1], s=7, color="crimson", marker="o", linewidths=0.0, label="measured")
     ax.set_xlabel("x (mm)")
     ax.set_ylabel("y (mm)")
     ax.set_aspect("equal", adjustable="box")
@@ -1490,8 +1535,8 @@ def plot_polyfit(
     """Plot the Fig. 12 style polynomial-corrected BPM map."""
     fig, ax = plt.subplots(figsize=(8.5, 5.0))
     plot_boundary(ax, boundary, button_masks_arr, button_colors)
-    ax.scatter(true_xy_mm[:, 0], true_xy_mm[:, 1], s=8, color="royalblue", marker="s", linewidths=0.0, label="input")
-    ax.scatter(fit_xy_mm[:, 0], fit_xy_mm[:, 1], s=9, color="crimson", marker=".", linewidths=0.0, label="polynomial fit")
+    ax.scatter(true_xy_mm[:, 0], true_xy_mm[:, 1], s=10, color="royalblue", marker="s", linewidths=0.0, label="input")
+    ax.scatter(fit_xy_mm[:, 0], fit_xy_mm[:, 1], s=7, color="crimson", marker="o", linewidths=0.0, label="polynomial fit")
     ax.set_xlabel("x (mm)")
     ax.set_ylabel("y (mm)")
     ax.set_aspect("equal", adjustable="box")
@@ -2062,8 +2107,8 @@ def run(cfg_path: Path) -> dict[str, Path]:
     measured_xy_mm = np.column_stack([kx_mm * dx, ky_mm * dy])
 
     poly_order = int(cfg["beam_grid"].get("polynomial_order", 5))
-    coef_x, coef_y = fit_polynomial_map(measured_xy_mm, beam_xy_mm, poly_order)
-    fit_xy_mm = apply_polynomial_map(measured_xy_mm, coef_x, coef_y, poly_order)
+    coef_x, coef_y, poly_sx_mm, poly_sy_mm = fit_polynomial_map(measured_xy_mm, beam_xy_mm, poly_order)
+    fit_xy_mm = apply_polynomial_map(measured_xy_mm, coef_x, coef_y, poly_order, poly_sx_mm, poly_sy_mm)
 
     linear_rms_mm, linear_max_mm = residual_metrics(beam_xy_mm, measured_xy_mm)
     poly_rms_mm, poly_max_mm = residual_metrics(beam_xy_mm, fit_xy_mm)

@@ -32,7 +32,7 @@ buttons:
   # `corners` means four pickups on the diagonals using labels A/B/C/D.
   # `cardinal` means top/right/bottom/left using labels T/R/B/L.
   layout: corners
-  radius_mm: 4.0
+  radius_mm: 7.0
   thickness_mm: 2.0
   gap_mm: 0.3
   capacitance_pf: 3.4
@@ -107,10 +107,10 @@ signal_cases:
 beam_grid:
   x_half_size_mm: 30.0
   y_half_size_mm: 30.0
-  nx: 51
-  ny: 51
+  nx: 31
+  ny: 31
   linear_fit_half_range_mm: 10.0
   polynomial_order: 5
 
 output:
-  directory: outputs/template_run
+  directory: outputs/linac_bpm
