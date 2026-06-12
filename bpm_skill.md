@@ -1,5 +1,5 @@
 ##### The BAR BPM.pdf discuss the way to calculate bpm signal. and cited SLAC_bpm.pdf which has more details and BeampositionMonitor.gdf which has boundary details.
-Create a python code to reproduce the BAR BPM.gdf results.
+Create a python code for the BPM.
 * Create a YAML file for the Input parameter:
 1. bunch charge and beam charge density , the beam charge density gives out in following two cases is arbitary unit, should be normalized first(intgral along the z=1), then times the bunch charge is the real .two cases 
 i) Gaussian distribution, set "sigma" and boundary cut off "n" which is cut off +-n sigma. if n==0, then no cut.
