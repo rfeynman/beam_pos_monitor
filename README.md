@@ -1082,7 +1082,3 @@ output:
 6. Switch to `array` density only after the geometry is working.
 7. If the arbitrary density shape looks too sharp, add more sample points instead of only increasing interpolation order.
 8. If BEM runtime is too slow, reduce `boundary_elements` or `nx`, `ny`.
-
-## 2.10 Current limitation
-
-The sample BAR polygon in this repository is not loaded from the missing `BeampositionMonitor.gdf`. It was inferred from the BAR note figure. If you provide the exact boundary coordinates from the GDF file, replace `chamber.points_mm` with those exact points and rerun.
