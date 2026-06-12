@@ -1,6 +1,6 @@
 # BPM Boundary-Element Reproduction Manual
 
-This directory contains a Python tool that reproduces the BAR BPM-style analysis with a YAML-driven workflow.
+This directory contains a Python tool that reproduces the BPM-style analysis with a YAML-driven workflow.
 
 Main files:
 
